@@ -2,6 +2,8 @@
 
 Monorepo for a silent Discord analytics collector and a password-protected Next.js dashboard backed by ClickHouse. Message text is not stored; only metadata and event fields are written.
 
+<!-- deploy bump: 2026-03-31 -->
+
 ## Structure
 
 - `bot/` — Node.js TypeScript service using discord.js. Connects to ClickHouse and ingests guild events for a single server ID. Leaves any other guild immediately. No commands and no chat responses.
