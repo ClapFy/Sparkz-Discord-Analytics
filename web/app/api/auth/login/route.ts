@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
-  const userOk = safeEqualString(username.trim(), env.ADMIN_USERNAME);
+  const userOk = safeEqualString(username.trim(), env.ADMIN_USERNAME.trim());
   const passOk = safeEqualString(password, env.ADMIN_PASSWORD);
   if (!userOk || !passOk) {
     return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
