@@ -1,8 +1,7 @@
-import { getServerSession } from "next-auth/next";
 import { NextResponse } from "next/server";
-import { authOptions } from "@/lib/auth";
 import { getClickHouse } from "@/lib/clickhouse";
 import { getWebEnv } from "@/lib/env";
+import { getSession } from "@/lib/session";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -37,8 +36,8 @@ const defaultLayout = {
 };
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.name) {
+  const session = await getSession();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const env = getWebEnv();
@@ -52,7 +51,7 @@ export async function GET() {
   `;
   const r = await ch.query({
     query: q,
-    query_params: { u: session.user.name },
+    query_params: { u: session.username },
     format: "JSONEachRow",
   });
   const rows = (await r.json()) as { layout_json?: string }[];
@@ -68,8 +67,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.name) {
+  const session = await getSession();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const json = await req.json();
@@ -83,7 +82,7 @@ export async function POST(req: Request) {
     table: `${env.CLICKHOUSE_DATABASE}.dashboard_layouts`,
     values: [
       {
-        username: session.user.name,
+        username: session.username,
         layout_json: JSON.stringify(parsed.data.layout),
         updated_at: new Date(),
       },

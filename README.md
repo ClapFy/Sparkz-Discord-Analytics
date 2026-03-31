@@ -7,7 +7,7 @@ Monorepo for a silent Discord analytics collector and a password-protected Next.
 ## Structure
 
 - `bot/` — Node.js TypeScript service using discord.js. Connects to ClickHouse and ingests guild events for a single server ID. Leaves any other guild immediately. No commands and no chat responses.
-- `web/` — Next.js App Router dashboard. Credentials auth via NextAuth, draggable dashboard tiles (react-grid-layout), charts via Recharts. All ClickHouse queries run on the server.
+- `web/` — Next.js App Router dashboard. Admin login uses a signed HTTP-only session cookie (JWT via `jose`, no NextAuth). Draggable tiles (react-grid-layout), charts via Recharts. All ClickHouse queries run on the server.
 - `clickhouse/migrations/` — SQL to create the database and tables. Apply these once against your ClickHouse instance before running the bot or web app.
 
 Root `package.json` defines npm workspaces `bot` and `web`.
@@ -89,7 +89,7 @@ Place the ClickHouse service in the **same Railway project** and use the **priva
 
 On first boot the bot runs DDL from `clickhouse/migrations/001_init.sql` against `CLICKHOUSE_DATABASE` (skipped if `SKIP_SCHEMA_ENSURE=true`).
 
-Set `AUTH_TRUST_HOST=true` so NextAuth accepts the Railway public hostname without hard-coding `NEXTAUTH_URL`. Still set a long random `NEXTAUTH_SECRET` (at least 32 characters).
+Set a long random `NEXTAUTH_SECRET` or `SESSION_SECRET` (at least 32 characters) so the dashboard session cookie can be signed. Either variable name works.
 
 Health check path: `/api/health`.
 
@@ -113,8 +113,8 @@ If the web build runs without variables, provide the same env vars during the bu
 | `CLICKHOUSE_SECURE` | bot, web | `true` or `false`. Use `true` for TLS (typical for ClickHouse Cloud). |
 | `ADMIN_USERNAME` | web only | Dashboard login username. |
 | `ADMIN_PASSWORD` | web only | Dashboard login password; use a strong value. |
-| `NEXTAUTH_SECRET` | web only | At least 32 characters, random. |
-| `NEXTAUTH_URL` | web only | Public base URL of the web app, e.g. `https://your-service.up.railway.app`. |
+| `NEXTAUTH_SECRET` | web only | At least 32 characters, random; signs the dashboard session cookie. |
+| `SESSION_SECRET` | web only | Alternative to `NEXTAUTH_SECRET` if you prefer the name. One of the two is required. |
 | `LOG_LEVEL` | bot optional | `debug`, `info`, `warn`, or `error`. Default `info`. |
 | `CH_BATCH_MS` | bot optional | Batch flush interval in milliseconds. Default `2000`. |
 | `CH_BATCH_MAX_ROWS` | bot optional | Flush when buffer reaches this many rows. Default `500`. |

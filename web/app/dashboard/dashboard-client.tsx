@@ -1,6 +1,5 @@
 "use client";
 
-import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Responsive, WidthProvider, type Layout, type Layouts } from "react-grid-layout";
 import {
@@ -485,8 +484,7 @@ function ConfigForm({
   );
 }
 
-export function DashboardClient() {
-  const { data: session } = useSession();
+export function DashboardClient({ username }: { username: string }) {
   const [doc, setDoc] = useState<DashboardDoc>(defaultDoc);
   const [loaded, setLoaded] = useState(false);
   const [configItem, setConfigItem] = useState<DashboardItem | null>(null);
@@ -599,15 +597,20 @@ export function DashboardClient() {
       >
         <div>
           <p className="sys-label">Dashboard // Grid</p>
-          <h1 style={{ margin: "4px 0 0", fontSize: "1.6rem", fontWeight: 400 }}>
-            {session?.user?.name ?? "Admin"}
-          </h1>
+          <h1 style={{ margin: "4px 0 0", fontSize: "1.6rem", fontWeight: 400 }}>{username}</h1>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           <button type="button" className="secondary" onClick={() => setAddOpen(true)}>
             Add tile
           </button>
-          <button type="button" className="secondary" onClick={() => signOut({ callbackUrl: "/login" })}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={async () => {
+              await fetch("/api/auth/logout", { method: "POST" });
+              window.location.href = "/login";
+            }}
+          >
             Sign out
           </button>
         </div>

@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.11.0",
+    "jose": "^5.9.6",
     "next": "^15.1.0",
-    "next-auth": "^4.24.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-grid-layout": "^1.5.0",
