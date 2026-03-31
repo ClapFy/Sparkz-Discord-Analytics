@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getClickHouse } from "@/lib/clickhouse";
+import { normalizeRowForJsonEachRow } from "@/lib/clickhouse-json-row";
 import { getWebEnv } from "@/lib/env";
 import { getSession } from "@/lib/session";
 import { z } from "zod";
@@ -81,11 +82,11 @@ export async function POST(req: Request) {
   await ch.insert({
     table: `${env.CLICKHOUSE_DATABASE}.dashboard_layouts`,
     values: [
-      {
+      normalizeRowForJsonEachRow({
         username: session.username,
         layout_json: JSON.stringify(parsed.data.layout),
         updated_at: new Date(),
-      },
+      }),
     ],
     format: "JSONEachRow",
   });

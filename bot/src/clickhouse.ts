@@ -3,6 +3,26 @@ import type { Env } from "./env.js";
 
 type TableRow = Record<string, unknown>;
 
+/** ClickHouse JSONEachRow rejects ISO strings with `T`/`Z`; use space-separated UTC. */
+function toClickhouseDateTime64(d: Date): string {
+  const s = d.toISOString();
+  return `${s.slice(0, 10)} ${s.slice(11, 23)}`;
+}
+
+function normalizeRowForJsonEachRow(row: TableRow): TableRow {
+  const out: TableRow = {};
+  for (const [key, val] of Object.entries(row)) {
+    if (val instanceof Date) {
+      out[key] = toClickhouseDateTime64(val);
+    } else if (Array.isArray(val)) {
+      out[key] = val.map((x) => (x instanceof Date ? toClickhouseDateTime64(x) : x));
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
 export class BatchedClickHouse {
   private client: ClickHouseClient;
   private buffers = new Map<string, TableRow[]>();
@@ -38,9 +58,10 @@ export class BatchedClickHouse {
   private async flushTable(table: string, rows: TableRow[]) {
     if (rows.length === 0) return;
     try {
+      const values = rows.map((r) => normalizeRowForJsonEachRow(r));
       await this.client.insert({
         table,
-        values: rows,
+        values,
         format: "JSONEachRow",
       });
     } catch (e) {
