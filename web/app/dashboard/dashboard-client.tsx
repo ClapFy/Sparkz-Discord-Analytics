@@ -8,6 +8,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -18,10 +19,11 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
+import { getDefaultDashboardDoc } from "@/lib/default-dashboard";
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
-export type WidgetType = "stat" | "timeseries" | "bar" | "table";
+export type WidgetType = "stat" | "timeseries" | "bar" | "table" | "section" | "placeholder";
 
 export interface DashboardItem {
   i: string;
@@ -80,9 +82,13 @@ function defaultConfig(type: WidgetType): Record<string, unknown> {
     case "timeseries":
       return { metric: "messages", rangeDays: 7, bucket: "day", chart: "line" };
     case "bar":
-      return { metric: "top_channels", rangeDays: 7, limit: 8 };
+      return { metric: "top_channels", rangeDays: 7, limit: 8, horizontal: false };
     case "table":
       return { kind: "member_events", limit: 15 };
+    case "section":
+      return {};
+    case "placeholder":
+      return { body: "Add context in tile config." };
     default:
       return {};
   }
@@ -98,9 +104,42 @@ function defaultTitle(type: WidgetType): string {
       return "Bar";
     case "table":
       return "Table";
+    case "section":
+      return "Section";
+    case "placeholder":
+      return "Note";
     default:
       return "Widget";
   }
+}
+
+const STAT_COMPARE_LABEL_24H = new Set([
+  "messages_24h",
+  "joins_24h",
+  "leaves_24h",
+  "voice_hours_24h",
+  "reactions_24h",
+  "net_member_change_24h",
+  "dau",
+]);
+
+function statCompareLabel(metric: string): string {
+  return STAT_COMPARE_LABEL_24H.has(metric) ? "vs prior 24h" : "vs prior period";
+}
+
+function formatStatValue(metric: string, v: number): string {
+  if (metric === "dau_mau_ratio") return v.toFixed(3);
+  if (
+    metric === "reply_rate_pct_7d" ||
+    metric === "lurker_pct_approx" ||
+    metric === "reactions_per_message_7d"
+  ) {
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  }
+  if (metric === "avg_days_join_to_first_message" || metric === "avg_voice_session_minutes_7d") {
+    return v.toFixed(1);
+  }
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
 
 async function postQuery(body: unknown) {
@@ -119,12 +158,20 @@ function WidgetBody({ item }: { item: DashboardItem }) {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const needsQuery = item.type === "stat" || item.type === "timeseries" || item.type === "bar" || item.type === "table";
+
   const payload = useMemo(
     () => ({ type: item.type, config: item.config }),
     [item.type, item.config]
   );
 
   useEffect(() => {
+    if (!needsQuery) {
+      setLoading(false);
+      setErr(null);
+      setData(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setErr(null);
@@ -141,19 +188,36 @@ function WidgetBody({ item }: { item: DashboardItem }) {
     return () => {
       cancelled = true;
     };
-  }, [payload]);
+  }, [payload, needsQuery]);
 
   const chartTheme = {
     stroke: "#888",
     fill: "#fff",
     grid: "#222",
     tick: "#888",
+    join: "#cfcfcf",
+    leave: "#666666",
+    voice: "#aaaaaa",
+    msg: "#ffffff",
   };
+
+  if (item.type === "section") {
+    return null;
+  }
+
+  if (item.type === "placeholder") {
+    return (
+      <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem", lineHeight: 1.45 }}>
+        {String(item.config.body ?? "")}
+      </p>
+    );
+  }
 
   if (loading) return <p className="sys-label">Loading</p>;
   if (err) return <p style={{ color: "#c66" }}>{err}</p>;
 
   if (item.type === "stat") {
+    const metric = String(item.config.metric ?? "");
     const s = data as { value?: number; previous?: number };
     const v = s?.value ?? 0;
     const p = s?.previous;
@@ -164,10 +228,10 @@ function WidgetBody({ item }: { item: DashboardItem }) {
     }
     return (
       <div>
-        <div style={{ fontSize: "2.2rem", lineHeight: 1 }}>{Number.isInteger(v) ? v : v.toFixed(2)}</div>
+        <div style={{ fontSize: "2.2rem", lineHeight: 1 }}>{formatStatValue(metric, v)}</div>
         {delta != null ? (
           <p className="sys-label" style={{ marginTop: 8 }}>
-            vs prior 24h: {delta}
+            {statCompareLabel(metric)}: {delta}
           </p>
         ) : null}
       </div>
@@ -175,7 +239,180 @@ function WidgetBody({ item }: { item: DashboardItem }) {
   }
 
   if (item.type === "timeseries") {
-    const rows = (data as { t?: string; c?: string }[]).map((r) => ({
+    const metric = String(item.config.metric ?? "");
+    const raw = data as Record<string, string | number>[];
+
+    if (metric === "joins_leaves") {
+      const rows = raw.map((r) => ({
+        t: r.t ? String(r.t).slice(0, 16) : "",
+        joins: Number(r.joins ?? 0),
+        leaves: Number(r.leaves ?? 0),
+      }));
+      return (
+        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 10 }} />
+              <YAxis tick={{ fill: chartTheme.tick, fontSize: 11 }} width={36} />
+              <Tooltip
+                contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="joins" fill={chartTheme.join} name="Joins" />
+              <Bar dataKey="leaves" fill={chartTheme.leave} name="Leaves" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    if (metric === "voice_vs_messages") {
+      const rows = raw.map((r) => ({
+        t: r.t ? String(r.t).slice(0, 16) : "",
+        voice_minutes: Number(r.voice_minutes ?? 0),
+        messages: Number(r.messages ?? 0),
+      }));
+      const chart = (item.config.chart as string) === "area" ? "area" : "line";
+      const common = (
+        <>
+          <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 11 }} />
+          <YAxis yAxisId="l" tick={{ fill: chartTheme.tick, fontSize: 11 }} width={40} />
+          <YAxis yAxisId="r" orientation="right" tick={{ fill: chartTheme.tick, fontSize: 11 }} width={36} />
+          <Tooltip
+            contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+        </>
+      );
+      return (
+        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            {chart === "area" ? (
+              <AreaChart data={rows} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                {common}
+                <Area
+                  yAxisId="l"
+                  type="monotone"
+                  dataKey="voice_minutes"
+                  name="Voice min"
+                  stroke={chartTheme.voice}
+                  fill="rgba(170,170,170,0.12)"
+                  dot={false}
+                  strokeWidth={1}
+                />
+                <Area
+                  yAxisId="r"
+                  type="monotone"
+                  dataKey="messages"
+                  name="Messages"
+                  stroke={chartTheme.msg}
+                  fill="rgba(255,255,255,0.06)"
+                  dot={false}
+                  strokeWidth={1}
+                />
+              </AreaChart>
+            ) : (
+              <LineChart data={rows} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                {common}
+                <Line
+                  yAxisId="l"
+                  type="monotone"
+                  dataKey="voice_minutes"
+                  name="Voice min"
+                  stroke={chartTheme.voice}
+                  dot={false}
+                  strokeWidth={1}
+                />
+                <Line
+                  yAxisId="r"
+                  type="monotone"
+                  dataKey="messages"
+                  name="Messages"
+                  stroke={chartTheme.msg}
+                  dot={false}
+                  strokeWidth={1}
+                />
+              </LineChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    if (metric === "attachments_split") {
+      const rows = raw.map((r) => ({
+        t: r.t ? String(r.t).slice(0, 16) : "",
+        text_only: Number(r.text_only ?? 0),
+        with_attachments: Number(r.with_attachments ?? 0),
+      }));
+      const chart = (item.config.chart as string) === "area" ? "area" : "line";
+      const common = (
+        <>
+          <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+          <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 11 }} />
+          <YAxis tick={{ fill: chartTheme.tick, fontSize: 11 }} width={36} />
+          <Tooltip
+            contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+        </>
+      );
+      return (
+        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            {chart === "area" ? (
+              <AreaChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                {common}
+                <Area
+                  type="monotone"
+                  dataKey="text_only"
+                  name="Text only"
+                  stackId="1"
+                  stroke="#888"
+                  fill="rgba(136,136,136,0.2)"
+                  dot={false}
+                  strokeWidth={1}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="with_attachments"
+                  name="With attachments"
+                  stackId="1"
+                  stroke="#fff"
+                  fill="rgba(255,255,255,0.15)"
+                  dot={false}
+                  strokeWidth={1}
+                />
+              </AreaChart>
+            ) : (
+              <LineChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                {common}
+                <Line
+                  type="monotone"
+                  dataKey="text_only"
+                  name="Text only"
+                  stroke="#888"
+                  dot={false}
+                  strokeWidth={1}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="with_attachments"
+                  name="With attachments"
+                  stroke="#fff"
+                  dot={false}
+                  strokeWidth={1}
+                />
+              </LineChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    const rows = raw.map((r) => ({
       t: r.t ? String(r.t).slice(0, 16) : "",
       c: Number(r.c ?? 0),
     }));
@@ -223,10 +460,37 @@ function WidgetBody({ item }: { item: DashboardItem }) {
   }
 
   if (item.type === "bar") {
+    const horizontal = Boolean(item.config.horizontal);
     const rows = (data as { k?: string; c?: string }[]).map((r) => ({
-      name: String(r.k ?? "").slice(0, 18),
+      name: String(r.k ?? "").slice(0, 22),
       c: Number(r.c ?? 0),
     }));
+    if (horizontal) {
+      return (
+        <div style={{ width: "100%", height: 220, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              layout="vertical"
+              data={rows}
+              margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
+            >
+              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tick={{ fill: chartTheme.tick, fontSize: 10 }} />
+              <YAxis
+                type="category"
+                dataKey="name"
+                tick={{ fill: chartTheme.tick, fontSize: 9 }}
+                width={68}
+              />
+              <Tooltip
+                contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+              />
+              <Bar dataKey="c" fill="#ffffff" opacity={0.85} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
     return (
       <div style={{ width: "100%", height: 220, minWidth: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -319,6 +583,26 @@ function ConfigForm({
           style={{ marginTop: 4, marginBottom: 12 }}
         />
 
+        {draft.type === "section" ? (
+          <p className="sys-label" style={{ marginBottom: 12 }}>
+            Section title uses the Title field above. No query runs for this tile.
+          </p>
+        ) : null}
+
+        {draft.type === "placeholder" ? (
+          <>
+            <label className="sys-label">Body text</label>
+            <textarea
+              value={String(draft.config.body ?? "")}
+              onChange={(e) =>
+                setDraft({ ...draft, config: { ...draft.config, body: e.target.value } })
+              }
+              rows={5}
+              style={{ marginTop: 4, marginBottom: 12, width: "100%", resize: "vertical" }}
+            />
+          </>
+        ) : null}
+
         {draft.type === "stat" ? (
           <>
             <label className="sys-label">Metric</label>
@@ -334,6 +618,20 @@ function ConfigForm({
               <option value="leaves_24h">Leaves (24h)</option>
               <option value="voice_hours_24h">Voice hours (24h)</option>
               <option value="reactions_24h">Reactions added (24h)</option>
+              <option value="net_member_change_24h">Net member change (24h)</option>
+              <option value="dau">Daily active authors (rolling ~24h)</option>
+              <option value="active_users_7d">Active authors (7d)</option>
+              <option value="active_users_30d">Active authors (30d)</option>
+              <option value="active_users_90d">Active authors (90d)</option>
+              <option value="dau_mau_ratio">DAU / MAU ratio</option>
+              <option value="avg_voice_session_minutes_7d">Avg voice session (min, 7d)</option>
+              <option value="reply_rate_pct_7d">Reply rate % (7d)</option>
+              <option value="lurker_pct_approx">Lurker % (approx)</option>
+              <option value="reactions_per_message_7d">Reactions per message (7d)</option>
+              <option value="churn_leaves_30d">Leaves count (30d)</option>
+              <option value="avg_days_join_to_first_message">Avg days join → first message</option>
+              <option value="voice_only_users">Users with voice, no text ever</option>
+              <option value="messages_in_threads_7d">Messages in threads (7d)</option>
             </select>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
               <input
@@ -343,7 +641,7 @@ function ConfigForm({
                   setDraft({ ...draft, config: { ...draft.config, compare: e.target.checked } })
                 }
               />
-              <span className="sys-label">Compare prior 24h</span>
+              <span className="sys-label">Compare prior period</span>
             </label>
           </>
         ) : null}
@@ -363,6 +661,11 @@ function ConfigForm({
               <option value="leaves">Leaves</option>
               <option value="reactions">Reactions</option>
               <option value="voice_minutes">Voice minutes</option>
+              <option value="member_count">Total members (guild snapshot)</option>
+              <option value="joins_leaves">Joins vs leaves (grouped)</option>
+              <option value="net_member_change">Net growth (joins − leaves)</option>
+              <option value="voice_vs_messages">Voice minutes vs messages</option>
+              <option value="attachments_split">Text-only vs attachments</option>
             </select>
             <label className="sys-label">Range (days)</label>
             <input
@@ -415,6 +718,12 @@ function ConfigForm({
             >
               <option value="top_channels">Top channels</option>
               <option value="top_emojis">Top emojis</option>
+              <option value="messages_by_hour">Messages by hour of day</option>
+              <option value="messages_by_dow">Messages by weekday</option>
+              <option value="top_voice_channels">Top voice channels (minutes)</option>
+              <option value="top_authors">Top authors</option>
+              <option value="roles_member_count">Role distribution (IDs)</option>
+              <option value="joins_by_week">Members by join week</option>
             </select>
             <label className="sys-label">Range (days)</label>
             <input
@@ -441,6 +750,16 @@ function ConfigForm({
               }
               style={{ marginTop: 4, marginBottom: 12 }}
             />
+            <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(draft.config.horizontal)}
+                onChange={(e) =>
+                  setDraft({ ...draft, config: { ...draft.config, horizontal: e.target.checked } })
+                }
+              />
+              <span className="sys-label">Horizontal bars</span>
+            </label>
           </>
         ) : null}
 
@@ -456,6 +775,7 @@ function ConfigForm({
             >
               <option value="member_events">Member events</option>
               <option value="message_events">Message events</option>
+              <option value="top_reacted_messages">Most reacted messages</option>
             </select>
             <label className="sys-label">Limit</label>
             <input
@@ -468,6 +788,24 @@ function ConfigForm({
               }
               style={{ marginTop: 4, marginBottom: 12 }}
             />
+            {String(draft.config.kind ?? "") === "top_reacted_messages" ? (
+              <>
+                <label className="sys-label">Reaction window (days)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={Number(draft.config.rangeDays ?? 30)}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      config: { ...draft.config, rangeDays: Number(e.target.value) },
+                    })
+                  }
+                  style={{ marginTop: 4, marginBottom: 12 }}
+                />
+              </>
+            ) : null}
           </>
         ) : null}
 
@@ -506,8 +844,17 @@ export function DashboardClient({ username }: { username: string }) {
       .then((r) => r.json())
       .then((j: { layout?: DashboardDoc }) => {
         if (cancelled || !j.layout) return;
+        const items = j.layout.items ?? [];
+        if (items.length === 0) {
+          const d = getDefaultDashboardDoc();
+          setDoc({
+            items: d.items as DashboardItem[],
+            layouts: d.layouts,
+          });
+          return;
+        }
         setDoc({
-          items: j.layout.items ?? [],
+          items,
           layouts: {
             lg: j.layout.layouts?.lg ?? [],
             md: j.layout.layouts?.md ?? [],
@@ -641,12 +988,27 @@ export function DashboardClient({ username }: { username: string }) {
                 justifyContent: "space-between",
                 gap: 8,
                 cursor: "grab",
-                paddingBottom: 8,
-                borderBottom: "1px solid #1a1a1a",
+                paddingBottom: item.type === "section" ? 6 : 8,
+                borderBottom: item.type === "section" ? "1px solid #2a2a2a" : "1px solid #1a1a1a",
                 touchAction: "none",
               }}
             >
-              <span className="sys-label" style={{ flex: 1, minWidth: 0 }}>
+              <span
+                className={item.type === "section" ? undefined : "sys-label"}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  ...(item.type === "section"
+                    ? {
+                        fontSize: "1rem",
+                        letterSpacing: "0.14em",
+                        textTransform: "uppercase",
+                        color: "var(--muted)",
+                        fontWeight: 400,
+                      }
+                    : {}),
+                }}
+              >
                 {item.title || item.type}
               </span>
               <button
@@ -666,7 +1028,7 @@ export function DashboardClient({ username }: { username: string }) {
                 Remove
               </button>
             </div>
-            <div style={{ flex: 1, minHeight: 0, marginTop: 8 }}>
+            <div style={{ flex: 1, minHeight: 0, marginTop: item.type === "section" ? 0 : 8 }}>
               <WidgetBody item={item} />
             </div>
           </div>

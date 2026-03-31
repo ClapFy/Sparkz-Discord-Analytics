@@ -9,7 +9,7 @@ const bodySchema = z.object({
     items: z.array(
       z.object({
         i: z.string(),
-        type: z.enum(["stat", "timeseries", "bar", "table"]),
+        type: z.enum(["stat", "timeseries", "bar", "table", "section", "placeholder"]),
         title: z.string().optional(),
         config: z.record(z.unknown()),
       })
