@@ -14,7 +14,7 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.username || !credentials?.password) return null;
         const env = getWebEnv();
-        const userOk = safeEqualString(credentials.username, env.ADMIN_USERNAME);
+        const userOk = safeEqualString(credentials.username.trim(), env.ADMIN_USERNAME);
         const passOk = safeEqualString(credentials.password, env.ADMIN_PASSWORD);
         if (!userOk || !passOk) return null;
         return { id: env.ADMIN_USERNAME, name: env.ADMIN_USERNAME };
@@ -25,7 +25,10 @@ export const authOptions: NextAuthOptions = {
   pages: { signIn: "/login" },
   callbacks: {
     async jwt({ token, user }) {
-      if (user?.name) token.name = user.name;
+      if (user) {
+        token.sub = user.id;
+        token.name = user.name ?? user.id;
+      }
       return token;
     },
     async session({ session, token }) {

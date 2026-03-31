@@ -1,11 +1,9 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -15,18 +13,20 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const res = await signIn("credentials", {
-      username,
-      password,
-      redirect: false,
-    });
-    setLoading(false);
-    if (res?.error) {
-      setError("Invalid credentials");
-      return;
+    try {
+      // redirect:false makes next-auth call `new URL(data.url)`; a relative success URL
+      // like `/dashboard` throws, so the promise never settles and the button stays on "Signing in".
+      await signIn("credentials", {
+        username: username.trim(),
+        password: password,
+        callbackUrl: "/dashboard",
+        redirect: true,
+      });
+    } catch {
+      setError("Sign in failed. Check credentials and try again.");
+    } finally {
+      setLoading(false);
     }
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (
