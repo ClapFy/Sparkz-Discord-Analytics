@@ -1,0 +1,13 @@
+{
+  "name": "sparkzanalytics",
+  "private": true,
+  "workspaces": ["bot", "web"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w bot && npm run build -w web",
+    "dev:bot": "npm run dev -w bot",
+    "dev:web": "npm run dev -w web"
+  }
+}

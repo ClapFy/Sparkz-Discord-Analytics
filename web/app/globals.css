@@ -1,0 +1,117 @@
+@import url("https://fonts.googleapis.com/css2?family=VT323&display=swap");
+
+:root {
+  --bg: #000000;
+  --fg: #ffffff;
+  --muted: #888888;
+  --line: #1a1a1a;
+  --panel: #0a0a0a;
+  --accent: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "VT323", ui-monospace, monospace;
+  font-size: 18px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--fg);
+}
+
+.scanlines {
+  position: relative;
+}
+
+.scanlines::after {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0) 50%,
+    rgba(0, 0, 0, 0.12) 50%,
+    rgba(0, 0, 0, 0.12)
+  );
+  background-size: 100% 4px;
+  opacity: 0.35;
+  z-index: 50;
+}
+
+.sys-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+input,
+select {
+  background: #111;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  padding: 8px 10px;
+  width: 100%;
+  max-width: 100%;
+}
+
+button {
+  background: var(--fg);
+  color: var(--bg);
+  border: none;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.react-grid-placeholder {
+  background: #222 !important;
+  opacity: 0.35 !important;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-color: #555 !important;
+}
+
+@media (max-width: 640px) {
+  body {
+    font-size: 16px;
+  }
+}
