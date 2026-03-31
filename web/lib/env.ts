@@ -8,7 +8,11 @@ const schema = z.object({
   CLICKHOUSE_PORT: z.coerce.number().int().positive().default(8443),
   CLICKHOUSE_USER: z.string().min(1),
   CLICKHOUSE_PASSWORD: z.string(),
-  CLICKHOUSE_DATABASE: z.string().min(1).default("sparkzanalytics"),
+  CLICKHOUSE_DATABASE: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9_]+$/, "alphanumeric database name only")
+    .default("sparkzanalytics"),
   CLICKHOUSE_SECURE: z
     .string()
     .optional()

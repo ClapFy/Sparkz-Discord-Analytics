@@ -70,21 +70,30 @@ Open `http://localhost:3000`, sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`, 
 
 ## Railway deployment
 
-Create **two** services from the same repository. Do not commit real secrets; set variables in the Railway dashboard.
+### Single service (bot plus dashboard)
 
-### Service: bot
+This repository supports one Railway service that runs the Discord bot and the Next.js app together (see root `nixpacks.toml`, `railway.toml`, and `npm run start:railway`).
 
-- **Root directory:** `bot`
-- **Build command:** `npm install && npm run build`
-- **Start command:** `npm start`
+- **Root directory:** repository root (not `web/` or `bot/`).
+- **Build:** Nixpacks runs `npm ci` and `npm run build` (both workspaces).
+- **Start:** `start:railway` runs the compiled bot in the background and Next.js on `PORT` with `--hostname 0.0.0.0`.
 
-### Service: web
+Place the ClickHouse service in the **same Railway project** and use the **private** hostname for HTTP (no TLS on the internal network):
 
-- **Root directory:** `web`
-- **Build command:** `npm install && npm run build`
-- **Start command:** `npm start`
+- `CLICKHOUSE_HOST=clickhouse.railway.internal` (or the value of `HOST` / `RAILWAY_PRIVATE_DOMAIN` from the ClickHouse service variables).
+- `CLICKHOUSE_PORT=8123`
+- `CLICKHOUSE_SECURE=false`
+- `CLICKHOUSE_DATABASE=railway` if you use the default Railway ClickHouse database name (see that service's `CLICKHOUSE_DB`).
 
-Set `NEXTAUTH_URL` on the web service to the public HTTPS origin Railway assigns (no trailing slash). Generate a long random `NEXTAUTH_SECRET` (at least 32 characters).
+On first boot the bot runs DDL from `clickhouse/migrations/001_init.sql` against `CLICKHOUSE_DATABASE` (skipped if `SKIP_SCHEMA_ENSURE=true`).
+
+Set `AUTH_TRUST_HOST=true` so NextAuth accepts the Railway public hostname without hard-coding `NEXTAUTH_URL`. Still set a long random `NEXTAUTH_SECRET` (at least 32 characters).
+
+Health check path: `/api/health`.
+
+### Two-service alternative
+
+You can instead deploy `bot/` and `web/` as separate Railway services with separate root directories; use the same ClickHouse variables on both (internal host recommended when colocated in one project).
 
 If the web build runs without variables, provide the same env vars during the build phase on Railway so `next build` can validate configuration when routes are analyzed.
 

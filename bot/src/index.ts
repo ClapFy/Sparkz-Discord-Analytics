@@ -5,6 +5,7 @@ import {
 } from "discord.js";
 import { BatchedClickHouse } from "./clickhouse.js";
 import { registerCollectors } from "./collectors.js";
+import { ensureSchema } from "./ensureSchema.js";
 import { loadEnv } from "./env.js";
 
 const env = loadEnv();
@@ -15,6 +16,11 @@ const levelIdx = levels.indexOf(env.LOG_LEVEL);
 function log(level: (typeof levels)[number], msg: string) {
   const i = levels.indexOf(level);
   if (i >= levelIdx) console.log(`[${level}] ${msg}`);
+}
+
+if (!env.SKIP_SCHEMA_ENSURE) {
+  await ensureSchema(env);
+  log("info", "ClickHouse schema ensured");
 }
 
 const ch = new BatchedClickHouse(env, (err) => {
