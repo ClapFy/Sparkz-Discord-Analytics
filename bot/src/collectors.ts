@@ -139,6 +139,7 @@ export function registerCollectors(
         queueChannelUpsert(chn, ch, null);
       }
     }
+    await ch.flushAll();
   });
 
   client.on("guildCreate", async (g) => {

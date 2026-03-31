@@ -151,6 +151,22 @@ function formatStatValue(metric: string, v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
 
+function SeriesEmptyState({ lines }: { lines: string[] }) {
+  return (
+    <div style={{ padding: "20px 12px", textAlign: "center" }}>
+      {lines.map((line, i) => (
+        <p
+          key={i}
+          className="sys-label"
+          style={{ margin: i ? "8px 0 0" : 0, color: "var(--muted)", lineHeight: 1.5 }}
+        >
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /** Poll all data tiles together on this interval (one batched HTTP request). */
 const TILE_REFRESH_MS = 1000;
 
@@ -343,7 +359,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
 
   if (item.type === "timeseries") {
     const metric = String(item.config.metric ?? "");
-    const raw = data as Record<string, string | number>[];
+    const raw = Array.isArray(data) ? (data as Record<string, string | number>[]) : [];
 
     if (metric === "joins_leaves") {
       const rows = raw.map((r) => ({
@@ -351,6 +367,16 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         joins: Number(r.joins ?? 0),
         leaves: Number(r.leaves ?? 0),
       }));
+      if (rows.length === 0) {
+        return (
+          <SeriesEmptyState
+            lines={[
+              "No join/leave buckets in this range.",
+              "Send a test message or trigger a member event after the bot has written to ClickHouse.",
+            ]}
+          />
+        );
+      }
       return (
         <div style={{ width: "100%", height: 200, minWidth: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -376,6 +402,13 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         voice_minutes: Number(r.voice_minutes ?? 0),
         messages: Number(r.messages ?? 0),
       }));
+      if (rows.length === 0) {
+        return (
+          <SeriesEmptyState
+            lines={["No voice/message buckets in this range.", "Voice sessions and messages appear once data exists."]}
+          />
+        );
+      }
       const chart = (item.config.chart as string) === "area" ? "area" : "line";
       const common = (
         <>
@@ -426,6 +459,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                   name="Voice min"
                   stroke={chartTheme.voice}
                   dot={false}
+                  activeDot={false}
                   strokeWidth={1}
                 />
                 <Line
@@ -435,6 +469,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                   name="Messages"
                   stroke={chartTheme.msg}
                   dot={false}
+                  activeDot={false}
                   strokeWidth={1}
                 />
               </LineChart>
@@ -450,6 +485,13 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         text_only: Number(r.text_only ?? 0),
         with_attachments: Number(r.with_attachments ?? 0),
       }));
+      if (rows.length === 0) {
+        return (
+          <SeriesEmptyState
+            lines={["No message rows in this range for attachments split.", "Messages table fills when the bot records chat."]}
+          />
+        );
+      }
       const chart = (item.config.chart as string) === "area" ? "area" : "line";
       const common = (
         <>
@@ -498,6 +540,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                   name="Text only"
                   stroke="#888"
                   dot={false}
+                  activeDot={false}
                   strokeWidth={1}
                 />
                 <Line
@@ -506,6 +549,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                   name="With attachments"
                   stroke="#fff"
                   dot={false}
+                  activeDot={false}
                   strokeWidth={1}
                 />
               </LineChart>
@@ -519,6 +563,29 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       t: r.t ? String(r.t).slice(0, 16) : "",
       c: Number(r.c ?? 0),
     }));
+    if (rows.length === 0) {
+      return (
+        <SeriesEmptyState
+          lines={[
+            "No data points in this date range.",
+            "If counts stay zero, the bot may not be inserting (check deploy logs) or this guild has no snapshots/events yet.",
+          ]}
+        />
+      );
+    }
+    if (rows.length === 1) {
+      return (
+        <div style={{ padding: "12px 8px" }}>
+          <div style={{ fontSize: "1.85rem", lineHeight: 1.2 }}>{rows[0].c}</div>
+          <p className="sys-label" style={{ marginTop: 8 }}>
+            {rows[0].t}
+          </p>
+          <p className="sys-label" style={{ marginTop: 10, color: "var(--muted)" }}>
+            Single time bucket — line charts need two or more points; this avoids the stray dot. More points appear as data accumulates.
+          </p>
+        </div>
+      );
+    }
     const chart = (item.config.chart as string) === "area" ? "area" : "line";
     const common = (
       <>
@@ -542,6 +609,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                 stroke={chartTheme.fill}
                 fill="rgba(255,255,255,0.08)"
                 dot={false}
+                activeDot={false}
                 strokeWidth={1}
               />
             </AreaChart>
@@ -553,6 +621,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                 dataKey="c"
                 stroke={chartTheme.fill}
                 dot={false}
+                activeDot={false}
                 strokeWidth={1}
               />
             </LineChart>
@@ -564,10 +633,17 @@ function WidgetBody({ item }: { item: DashboardItem }) {
 
   if (item.type === "bar") {
     const horizontal = Boolean(item.config.horizontal);
-    const rows = (data as { k?: string; c?: string }[]).map((r) => ({
+    const rows = (Array.isArray(data) ? data : []).map((r: { k?: string; c?: string }) => ({
       name: String(r.k ?? "").slice(0, 22),
       c: Number(r.c ?? 0),
     }));
+    if (rows.length === 0) {
+      return (
+        <SeriesEmptyState
+          lines={["No rows for this chart in the selected range.", "Bars fill once the bot has written matching events."]}
+        />
+      );
+    }
     if (horizontal) {
       return (
         <div style={{ width: "100%", height: 220, minWidth: 0 }}>
