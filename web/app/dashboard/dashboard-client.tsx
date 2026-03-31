@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Responsive, WidthProvider, type Layout, type Layouts } from "react-grid-layout";
 import {
   Area,
@@ -142,53 +151,129 @@ function formatStatValue(metric: string, v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
 
-async function postQuery(body: unknown) {
-  const r = await fetch("/api/dashboard/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error("query failed");
-  const j = (await r.json()) as { data: unknown };
-  return j.data;
+/** Poll all data tiles together on this interval (one batched HTTP request). */
+const TILE_REFRESH_MS = 1000;
+
+type TileEntry = { data?: unknown; err: string | null; hydrated: boolean };
+
+const TileDataContext = createContext<{ entries: Record<string, TileEntry> } | null>(null);
+
+function TileDataProvider({ items, children }: { items: DashboardItem[]; children: ReactNode }) {
+  const [entries, setEntries] = useState<Record<string, TileEntry>>({});
+
+  const widgets = useMemo(() => {
+    return items
+      .filter(
+        (i): i is DashboardItem & { type: "stat" | "timeseries" | "bar" | "table" } =>
+          i.type === "stat" || i.type === "timeseries" || i.type === "bar" || i.type === "table"
+      )
+      .map((i) => ({ i: i.i, type: i.type, config: i.config }));
+  }, [items]);
+
+  const widgetsKey = useMemo(() => JSON.stringify(widgets), [widgets]);
+
+  useEffect(() => {
+    let list: { i: string; type: "stat" | "timeseries" | "bar" | "table"; config: Record<string, unknown> }[];
+    try {
+      list = JSON.parse(widgetsKey) as typeof list;
+    } catch {
+      list = [];
+    }
+
+    if (list.length === 0) {
+      setEntries({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const r = await fetch("/api/dashboard/query-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ widgets: list }),
+        });
+        const j = (await r.json()) as {
+          results?: { i: string; ok: boolean; data?: unknown; error?: string }[];
+          error?: unknown;
+        };
+
+        if (cancelled) return;
+
+        if (!r.ok) {
+          const msg =
+            j?.error != null && typeof j.error === "object"
+              ? JSON.stringify(j.error)
+              : String(j?.error ?? r.statusText);
+          setEntries((prev) => {
+            const next = { ...prev };
+            for (const w of list) {
+              const p = prev[w.i];
+              if (p?.data !== undefined && p.hydrated) {
+                next[w.i] = { ...p, err: null };
+              } else {
+                next[w.i] = { data: p?.data, err: `Batch: ${msg}`, hydrated: false };
+              }
+            }
+            return next;
+          });
+          return;
+        }
+
+        const results = j.results ?? [];
+        setEntries((prev) => {
+          const next = { ...prev };
+          for (const row of results) {
+            if (row.ok) {
+              next[row.i] = { data: row.data, err: null, hydrated: true };
+            } else {
+              const p = prev[row.i];
+              if (p?.data !== undefined && p.hydrated) {
+                next[row.i] = { ...p, err: null };
+              } else {
+                next[row.i] = {
+                  data: undefined,
+                  err: row.error ?? "Query error",
+                  hydrated: false,
+                };
+              }
+            }
+          }
+          return next;
+        });
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "Network error";
+        setEntries((prev) => {
+          const next = { ...prev };
+          for (const w of list) {
+            const p = prev[w.i];
+            if (p?.data !== undefined && p.hydrated) {
+              next[w.i] = { ...p, err: null };
+            } else {
+              next[w.i] = { data: undefined, err: msg, hydrated: false };
+            }
+          }
+          return next;
+        });
+      }
+    };
+
+    void run();
+    const id = setInterval(run, TILE_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [widgetsKey]);
+
+  return <TileDataContext.Provider value={{ entries }}>{children}</TileDataContext.Provider>;
 }
 
 function WidgetBody({ item }: { item: DashboardItem }) {
-  const [data, setData] = useState<unknown>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
   const needsQuery = item.type === "stat" || item.type === "timeseries" || item.type === "bar" || item.type === "table";
-
-  const payload = useMemo(
-    () => ({ type: item.type, config: item.config }),
-    [item.type, item.config]
-  );
-
-  useEffect(() => {
-    if (!needsQuery) {
-      setLoading(false);
-      setErr(null);
-      setData(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setErr(null);
-    postQuery(payload)
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch(() => {
-        if (!cancelled) setErr("Load failed");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [payload, needsQuery]);
+  const ctx = useContext(TileDataContext);
 
   const chartTheme = {
     stroke: "#888",
@@ -213,8 +298,26 @@ function WidgetBody({ item }: { item: DashboardItem }) {
     );
   }
 
-  if (loading) return <p className="sys-label">Loading</p>;
-  if (err) return <p style={{ color: "#c66" }}>{err}</p>;
+  if (needsQuery) {
+    if (!ctx) {
+      return <p className="sys-label">Loading</p>;
+    }
+    const entry = ctx.entries[item.i];
+    if (!entry || (!entry.hydrated && !entry.err)) {
+      return <p className="sys-label">Loading</p>;
+    }
+    if (entry.data === undefined && entry.err) {
+      return <p style={{ color: "#c66" }}>{entry.err}</p>;
+    }
+    if (entry.data === undefined) {
+      return <p className="sys-label">Loading</p>;
+    }
+  }
+
+  const data = needsQuery && ctx ? ctx.entries[item.i]!.data : null;
+  if (needsQuery && data === undefined) {
+    return <p className="sys-label">Loading</p>;
+  }
 
   if (item.type === "stat") {
     const metric = String(item.config.metric ?? "");
@@ -827,6 +930,38 @@ export function DashboardClient({ username }: { username: string }) {
   const [loaded, setLoaded] = useState(false);
   const [configItem, setConfigItem] = useState<DashboardItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    if (!loaded) return;
+    let cancelled = false;
+    const pull = () => {
+      fetch("/api/dashboard/diagnostics")
+        .then(async (r) => {
+          const j = (await r.json()) as Record<string, unknown>;
+          if (!r.ok) {
+            if (!cancelled) {
+              setDiag({
+                ok: false,
+                error: String(j.error ?? `HTTP ${r.status}`),
+                hint: "Session may have expired — refresh or sign in again.",
+              });
+            }
+            return;
+          }
+          if (!cancelled) setDiag(j);
+        })
+        .catch(() => {
+          if (!cancelled) setDiag({ ok: false, error: "Diagnostics request failed" });
+        });
+    };
+    pull();
+    const id = setInterval(pull, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [loaded]);
 
   const saveRef = useRef(
     debounce(async (layout: DashboardDoc) => {
@@ -929,41 +1064,62 @@ export function DashboardClient({ username }: { username: string }) {
   }
 
   return (
-    <main style={{ minHeight: "100vh", padding: "12px 12px 48px" }}>
-      <header
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 16,
-          paddingBottom: 12,
-          borderBottom: "1px solid #1a1a1a",
-        }}
-      >
-        <div>
-          <p className="sys-label">Dashboard // Grid</p>
-          <h1 style={{ margin: "4px 0 0", fontSize: "1.6rem", fontWeight: 400 }}>{username}</h1>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <button type="button" className="secondary" onClick={() => setAddOpen(true)}>
-            Add tile
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={async () => {
-              await fetch("/api/auth/logout", { method: "POST" });
-              window.location.href = "/login";
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
+    <TileDataProvider items={doc.items}>
+      <main style={{ minHeight: "100vh", padding: "12px 12px 48px" }}>
+        <header
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 12,
+            paddingBottom: 12,
+            borderBottom: "1px solid #1a1a1a",
+          }}
+        >
+          <div>
+            <p className="sys-label">Dashboard // Grid · tiles refresh every {TILE_REFRESH_MS / 1000}s</p>
+            <h1 style={{ margin: "4px 0 0", fontSize: "1.6rem", fontWeight: 400 }}>{username}</h1>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button type="button" className="secondary" onClick={() => setAddOpen(true)}>
+              Add tile
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" });
+                window.location.href = "/login";
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
 
-      <ResponsiveGridLayout
+        {diag == null ? (
+          <p className="sys-label" style={{ marginBottom: 12 }}>
+            Checking database…
+          </p>
+        ) : diag.ok === false ? (
+          <p className="sys-label" style={{ marginBottom: 12, color: "#c66", maxWidth: 720 }}>
+            Database: {String(diag.error ?? "unreachable")}. {String(diag.hint ?? "")}
+          </p>
+        ) : (
+          <p className="sys-label" style={{ marginBottom: 12, maxWidth: 900, lineHeight: 1.5 }}>
+            ClickHouse {String(diag.database ?? "")} · guild {String(diag.guildIdSuffix ?? "")} ·{" "}
+            {String(diag.latencyMs ?? "?")}ms · message_events: {String((diag.counts as Record<string, number> | undefined)?.message_events ?? "?")} ·
+            messages: {String((diag.counts as Record<string, number> | undefined)?.messages ?? "?")} ·
+            member_events: {String((diag.counts as Record<string, number> | undefined)?.member_events ?? "?")}
+            {diag.hint ? (
+              <span style={{ display: "block", marginTop: 6, color: "#c9a227" }}>{String(diag.hint)}</span>
+            ) : null}
+          </p>
+        )}
+
+        <ResponsiveGridLayout
         className="layout"
         layouts={doc.layouts}
         breakpoints={breakpoints}
@@ -1068,9 +1224,10 @@ export function DashboardClient({ username }: { username: string }) {
         </div>
       ) : null}
 
-      {configItem ? (
-        <ConfigForm item={configItem} onSave={updateItem} onClose={() => setConfigItem(null)} />
-      ) : null}
-    </main>
+        {configItem ? (
+          <ConfigForm item={configItem} onSave={updateItem} onClose={() => setConfigItem(null)} />
+        ) : null}
+      </main>
+    </TileDataProvider>
   );
 }
