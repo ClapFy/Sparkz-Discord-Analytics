@@ -32,9 +32,10 @@ curl -sS -H "Authorization: Bearer $INTERNAL_DIAG_TOKEN" "https://YOUR_WEB_ORIGI
 
 ## MCP / Cursor
 
-- Standard **fetch** tools often cannot set custom `Authorization` headers. Prefer **terminal + curl** (above) or the **browser** page.
-- If you use the **ClickHouse** MCP against the same cluster, you can cross-check counts and run ad-hoc SQL; keep that MCP pointed at the same database as the bot/web.
-- **Railway MCP** (if enabled) is for deploy/logs — still trigger deploys from **GitHub** (push/workflow), not ad-hoc production edits.
+- **Railway MCP:** use `link-service` + `set-variables` / `list-variables` with this repo’s `workspacePath`. Full workflow: `devtools/mcp/OPERATOR_RUNBOOK.md`.
+- Standard **fetch** tools often cannot set custom `Authorization` headers for this API. Prefer **terminal + curl** (above) or the **browser** page.
+- **ClickHouse MCP:** call `mcp_auth` on the plugin server, then run queries against the same DB as `CLICKHOUSE_*` on the web/bot service.
+- **Deploys:** code only via **GitHub** push; Railway MCP is for variables, logs, and operational actions — not a substitute for git.
 
 ## Security
 
