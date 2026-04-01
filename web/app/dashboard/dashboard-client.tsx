@@ -287,6 +287,14 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
   return <TileDataContext.Provider value={{ entries }}>{children}</TileDataContext.Provider>;
 }
 
+/** Upper bound for Y when only one time bucket exists — keeps the bar proportional (not full-height). */
+function yAxisMaxForSinglePoint(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  if (v <= 0) return 1;
+  if (Number.isInteger(v)) return Math.max(1, Math.ceil(v * 1.2));
+  return Math.max(v * 1.2, 1);
+}
+
 function WidgetBody({ item }: { item: DashboardItem }) {
   const needsQuery = item.type === "stat" || item.type === "timeseries" || item.type === "bar" || item.type === "table";
   const ctx = useContext(TileDataContext);
@@ -574,15 +582,26 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       );
     }
     if (rows.length === 1) {
+      const v = rows[0].c;
+      const yMax = yAxisMaxForSinglePoint(v);
       return (
-        <div style={{ padding: "12px 8px" }}>
-          <div style={{ fontSize: "1.85rem", lineHeight: 1.2 }}>{rows[0].c}</div>
-          <p className="sys-label" style={{ marginTop: 8 }}>
-            {rows[0].t}
-          </p>
-          <p className="sys-label" style={{ marginTop: 10, color: "var(--muted)" }}>
-            Single time bucket — line charts need two or more points; this avoids the stray dot. More points appear as data accumulates.
-          </p>
+        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
+              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 11 }} />
+              <YAxis
+                domain={[0, yMax]}
+                tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                width={40}
+                allowDecimals={!Number.isInteger(v)}
+              />
+              <Tooltip
+                contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+              />
+              <Bar dataKey="c" fill={chartTheme.fill} radius={[4, 4, 0, 0]} maxBarSize={72} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       );
     }
