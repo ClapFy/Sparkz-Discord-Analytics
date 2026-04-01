@@ -103,7 +103,7 @@ If the web build runs without variables, provide the same env vars during the bu
 
 | Variable | Service | Format / notes |
 |----------|---------|----------------|
-| `DISCORD_BOT_TOKEN` | bot only | Discord bot token string. |
+| `DISCORD_BOT_TOKEN` | bot; web recommended | Bot login. On the dashboard service, set the same token so **message/member event tables** can resolve user and channel names via Discord REST (tables show raw IDs if unset). |
 | `DISCORD_GUILD_ID` | bot, web | Numeric snowflake string. Target guild only; bot leaves all others. Web uses this to scope queries. Must match between bot and web. |
 | `CLICKHOUSE_HOST` | bot, web | Hostname only, no `https://` prefix. |
 | `CLICKHOUSE_PORT` | bot, web | Integer. Common values: `8443` (HTTPS native interface), `8123` (HTTP). |

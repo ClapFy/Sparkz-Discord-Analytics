@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getClickHouse } from "./clickhouse";
+import { enrichMemberEventTableRows, enrichMessageEventTableRows } from "./discord-resolve";
 import { getWebEnv, getGuildIdU64 } from "./env";
 
 const statMetric = z.enum([
@@ -462,12 +463,14 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
       if (kind === "member_events") {
         const qy = `SELECT formatDateTime(at, '%Y-%m-%d %H:%i:%s') AS at, user_id, event FROM ${database}.member_events WHERE guild_id = {g:UInt64} ORDER BY at DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as Record<string, string>[];
+        return enrichMemberEventTableRows(rows, g);
       }
       if (kind === "message_events") {
         const qy = `SELECT formatDateTime(at, '%Y-%m-%d %H:%i:%s') AS at, channel_id, author_id, event FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64}`)} AS _dm ORDER BY at DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as Record<string, string>[];
+        return enrichMessageEventTableRows(rows, g);
       }
       const qy = `SELECT message_id, channel_id, count() AS reaction_count FROM ${database}.reactions WHERE guild_id = {g:UInt64} AND added = 1 AND at >= subtractDays(now(), {rd:UInt32}) GROUP BY message_id, channel_id ORDER BY reaction_count DESC LIMIT {lim:UInt32}`;
       const r = await ch.query({ query: qy, query_params: { g, lim: limit, rd: reactedDays }, format: "JSONEachRow" });
