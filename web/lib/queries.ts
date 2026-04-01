@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { getClickHouse } from "./clickhouse";
-import { enrichMemberEventTableRows, enrichMessageEventTableRows } from "./discord-resolve";
+import {
+  enrichBarRowsByKeyKind,
+  enrichMemberEventTableRows,
+  enrichMessageEventTableRows,
+  enrichTopReactedTableRows,
+} from "./discord-resolve";
 import { getWebEnv, getGuildIdU64 } from "./env";
 
 const statMetric = z.enum([
@@ -412,7 +417,8 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
       if (metric === "top_channels") {
         const qy = `SELECT channel_id AS k, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as { k?: string; c?: string }[];
+        return enrichBarRowsByKeyKind(rows, g, "channel");
       }
       if (metric === "top_emojis") {
         const qy = `SELECT emoji AS k, count() AS c FROM ${database}.reactions WHERE guild_id = {g:UInt64} AND added = 1 AND at >= subtractDays(now(), {d:UInt32}) GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
@@ -438,17 +444,20 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
       if (metric === "top_voice_channels") {
         const qy = `SELECT channel_id AS k, sum(duration_seconds) / 60 AS c FROM ${database}.voice_sessions WHERE guild_id = {g:UInt64} AND started_at >= subtractDays(now(), {d:UInt32}) GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as { k?: string; c?: string }[];
+        return enrichBarRowsByKeyKind(rows, g, "channel");
       }
       if (metric === "top_authors") {
         const qy = `SELECT author_id AS k, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as { k?: string; c?: string }[];
+        return enrichBarRowsByKeyKind(rows, g, "user");
       }
       if (metric === "roles_member_count") {
         const qy = `SELECT toString(role_id) AS k, count() AS c FROM ${database}.members FINAL ARRAY JOIN role_ids AS role_id WHERE guild_id = {g:UInt64} GROUP BY role_id ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, lim: limit }, format: "JSONEachRow" });
-        return await r.json();
+        const rows = (await r.json()) as { k?: string; c?: string }[];
+        return enrichBarRowsByKeyKind(rows, g, "role");
       }
       if (metric === "joins_by_week") {
         const qy = `SELECT formatDateTime(toStartOfWeek(joined_at), '%Y-%m-%d') AS k, count() AS c FROM ${database}.members FINAL WHERE guild_id = {g:UInt64} AND joined_at IS NOT NULL AND joined_at >= subtractDays(now(), {d:UInt32}) GROUP BY k ORDER BY k`;
@@ -474,7 +483,8 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
       }
       const qy = `SELECT message_id, channel_id, count() AS reaction_count FROM ${database}.reactions WHERE guild_id = {g:UInt64} AND added = 1 AND at >= subtractDays(now(), {rd:UInt32}) GROUP BY message_id, channel_id ORDER BY reaction_count DESC LIMIT {lim:UInt32}`;
       const r = await ch.query({ query: qy, query_params: { g, lim: limit, rd: reactedDays }, format: "JSONEachRow" });
-      return await r.json();
+      const reacted = (await r.json()) as Record<string, string>[];
+      return enrichTopReactedTableRows(reacted, g);
     }
     default:
       return null;
