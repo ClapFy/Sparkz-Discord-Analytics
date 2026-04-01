@@ -652,11 +652,11 @@ function WidgetBody({ item }: { item: DashboardItem }) {
 
   if (item.type === "bar") {
     const horizontal = Boolean(item.config.horizontal);
-    const rows = (Array.isArray(data) ? data : []).map((r: { k?: string; c?: string }) => ({
-      name: String(r.k ?? "").slice(0, 40),
+    const rawBars = (Array.isArray(data) ? data : []).map((r: { k?: string; c?: string }) => ({
+      nameFull: String(r.k ?? ""),
       c: Number(r.c ?? 0),
     }));
-    if (rows.length === 0) {
+    if (rawBars.length === 0) {
       return (
         <SeriesEmptyState
           lines={["No rows for this chart in the selected range.", "Bars fill once the bot has written matching events."]}
@@ -664,31 +664,44 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       );
     }
     if (horizontal) {
+      const rows = rawBars.map((r) => ({ name: r.nameFull, c: r.c }));
+      const maxLen = rows.reduce((m, r) => Math.max(m, r.name.length), 0);
+      const yAxisWidth = Math.min(340, Math.max(168, Math.ceil(maxLen * 6.8 + 16)));
+      const chartH = Math.max(240, rows.length * 44 + 48);
       return (
-        <div style={{ width: "100%", height: 220, minWidth: 0 }}>
+        <div style={{ width: "100%", maxHeight: 440, overflowY: "auto", minWidth: 0 }}>
+          <div style={{ width: "100%", height: chartH, minWidth: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               layout="vertical"
               data={rows}
-              margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
+              margin={{ top: 10, right: 16, left: 8, bottom: 10 }}
+              barCategoryGap={14}
             >
               <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" horizontal={false} />
-              <XAxis type="number" tick={{ fill: chartTheme.tick, fontSize: 10 }} />
+              <XAxis type="number" tick={{ fill: chartTheme.tick, fontSize: 12 }} />
               <YAxis
                 type="category"
                 dataKey="name"
-                tick={{ fill: chartTheme.tick, fontSize: 9 }}
-                width={112}
+                width={yAxisWidth}
+                interval={0}
+                tick={{
+                  fill: chartTheme.tick,
+                  fontSize: 12,
+                  dominantBaseline: "middle",
+                }}
               />
               <Tooltip
                 contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
               />
-              <Bar dataKey="c" fill="#ffffff" opacity={0.85} />
+              <Bar dataKey="c" fill="#ffffff" opacity={0.85} maxBarSize={36} radius={[0, 3, 3, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          </div>
         </div>
       );
     }
+    const rows = rawBars.map((r) => ({ name: r.nameFull.slice(0, 40), c: r.c }));
     return (
       <div style={{ width: "100%", height: 220, minWidth: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
