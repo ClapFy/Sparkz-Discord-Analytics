@@ -22,7 +22,8 @@ export async function ensureSchema(env: Env): Promise<void> {
     url: `${env.CLICKHOUSE_SECURE ? "https" : "http"}://${env.CLICKHOUSE_HOST}:${env.CLICKHOUSE_PORT}`,
     username: env.CLICKHOUSE_USER,
     password: env.CLICKHOUSE_PASSWORD,
-    database: env.CLICKHOUSE_DATABASE,
+    // Use `default` until the app database exists; targeting a missing DB fails the session.
+    database: "default",
   });
   try {
     await client.command({
