@@ -106,8 +106,16 @@ button:disabled {
   opacity: 0.35 !important;
 }
 
-.react-grid-item > .react-resizable-handle::after {
-  border-color: #555 !important;
+.layout .react-grid-item > .react-resizable-handle {
+  z-index: 2;
+}
+
+.layout .react-grid-item > .react-resizable-handle::after {
+  border-color: #2a2a2a !important;
+  width: 10px !important;
+  height: 10px !important;
+  right: 2px !important;
+  bottom: 2px !important;
 }
 
 @media (max-width: 640px) {

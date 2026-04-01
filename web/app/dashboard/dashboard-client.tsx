@@ -1109,6 +1109,7 @@ export function DashboardClient({ username }: { username: string }) {
   };
 
   const removeWidget = (id: string) => {
+    setConfigItem((c) => (c?.i === id ? null : c));
     setDoc((prev) => {
       const items = prev.items.filter((x) => x.i !== id);
       const layouts: Layouts = { ...prev.layouts };
@@ -1213,52 +1214,66 @@ export function DashboardClient({ username }: { username: string }) {
         {doc.items.map((item) => (
           <div key={item.i} className="panel" style={{ display: "flex", flexDirection: "column" }}>
             <div
-              className="tile-drag"
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 8,
-                cursor: "grab",
                 paddingBottom: item.type === "section" ? 6 : 8,
                 borderBottom: item.type === "section" ? "1px solid #2a2a2a" : "1px solid #1a1a1a",
-                touchAction: "none",
               }}
             >
-              <span
-                className={item.type === "section" ? undefined : "sys-label"}
+              <div
+                className="tile-drag"
                 style={{
                   flex: 1,
                   minWidth: 0,
-                  ...(item.type === "section"
-                    ? {
-                        fontSize: "1rem",
-                        letterSpacing: "0.14em",
-                        textTransform: "uppercase",
-                        color: "var(--muted)",
-                        fontWeight: 400,
-                      }
-                    : {}),
+                  cursor: "grab",
+                  touchAction: "none",
+                  display: "flex",
+                  alignItems: "center",
                 }}
               >
-                {item.title || item.type}
-              </span>
-              <button
-                type="button"
-                className="secondary"
-                style={{ padding: "4px 8px", fontSize: "0.75rem" }}
-                onClick={() => setConfigItem(item)}
+                <span
+                  className={item.type === "section" ? undefined : "sys-label"}
+                  style={{
+                    minWidth: 0,
+                    ...(item.type === "section"
+                      ? {
+                          fontSize: "1rem",
+                          letterSpacing: "0.14em",
+                          textTransform: "uppercase",
+                          color: "var(--muted)",
+                          fontWeight: 400,
+                        }
+                      : {}),
+                  }}
+                >
+                  {item.title || item.type}
+                </span>
+              </div>
+              <div
+                style={{ display: "flex", gap: 8, flexShrink: 0 }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
               >
-                Config
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                style={{ padding: "4px 8px", fontSize: "0.75rem" }}
-                onClick={() => removeWidget(item.i)}
-              >
-                Remove
-              </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ padding: "4px 8px", fontSize: "0.75rem" }}
+                  onClick={() => setConfigItem(item)}
+                >
+                  Config
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ padding: "4px 8px", fontSize: "0.75rem" }}
+                  onClick={() => removeWidget(item.i)}
+                >
+                  Remove
+                </button>
+              </div>
             </div>
             <div style={{ flex: 1, minHeight: 0, marginTop: item.type === "section" ? 0 : 8 }}>
               <WidgetBody item={item} />

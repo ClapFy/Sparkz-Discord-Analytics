@@ -96,6 +96,14 @@ function gid() {
   return getGuildIdU64();
 }
 
+/**
+ * One row per (guild_id, message_id, event) with min(at) — collapses duplicate inserts
+ * for the same logical Discord event.
+ */
+function messageEventsDeduped(database: string, whereClause: string): string {
+  return `(SELECT guild_id, message_id, any(channel_id) AS channel_id, any(author_id) AS author_id, event, min(at) AS at FROM ${database}.message_events WHERE ${whereClause} GROUP BY guild_id, message_id, event)`;
+}
+
 async function scalarNumber(query: string, params: Record<string, unknown>): Promise<number> {
   const ch = getClickHouse();
   const r = await ch.query({
@@ -119,7 +127,7 @@ function statSql(
       ? "at >= subtractDays(now(), 1)"
       : "at >= subtractDays(now(), 2) AND at < subtractDays(now(), 1)";
   if (metric === "messages_24h") {
-    return `SELECT count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND ${time}`;
+    return `SELECT count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND ${time}`)} AS _d`;
   }
   if (metric === "joins_24h") {
     return `SELECT count() AS c FROM ${database}.member_events WHERE guild_id = {g:UInt64} AND event = 'join' AND ${time}`;
@@ -224,7 +232,7 @@ async function statScalar(
       SELECT if(m > 0, greatest(m - msg, 0) * 100.0 / m, 0) AS c FROM (
         SELECT
           (SELECT toFloat64(uniqExact(user_id)) FROM ${database}.members FINAL WHERE guild_id = {g:UInt64}) AS m,
-          (SELECT toFloat64(uniqExact(author_id)) FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create') AS msg
+          (SELECT toFloat64(uniqExact(author_id)) FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create'`)} AS _dm) AS msg
       )
     `;
     return scalarNumber(q, { g });
@@ -243,7 +251,7 @@ async function statScalar(
       SELECT if(mc > 0, rc / mc, 0) AS c FROM (
         SELECT
           toFloat64((SELECT count() FROM ${database}.reactions WHERE guild_id = {g:UInt64} AND added = 1 AND ${rcCond})) AS rc,
-          toFloat64(greatest((SELECT count() FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND ${mcCond}), 1)) AS mc
+          toFloat64(greatest((SELECT count() FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND ${mcCond}`)} AS _dm), 1)) AS mc
       )
     `;
     return scalarNumber(q, { g });
@@ -263,7 +271,7 @@ async function statScalar(
         SELECT user_id, min(joined_at) AS first_join FROM ${database}.members FINAL WHERE guild_id = {g:UInt64} AND joined_at IS NOT NULL GROUP BY user_id
       ) AS j
       INNER JOIN (
-        SELECT author_id AS user_id, min(at) AS first_msg FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' GROUP BY author_id
+        SELECT author_id AS user_id, min(at) AS first_msg FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create'`)} AS _dm GROUP BY author_id
       ) AS m ON j.user_id = m.user_id
     `;
     return scalarNumber(q, { g });
@@ -274,7 +282,7 @@ async function statScalar(
       SELECT uniqExact(v.user_id) AS c FROM ${database}.voice_sessions v
       WHERE v.guild_id = {g:UInt64}
         AND v.user_id NOT IN (
-          SELECT author_id FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create'
+          SELECT author_id FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create'`)} AS _dm
         )
     `;
     return scalarNumber(q, { g });
@@ -355,8 +363,7 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
             ),
             m AS (
               SELECT toStartOfInterval(at, ${interval}) AS t, count() AS messages
-              FROM ${database}.message_events
-              WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})
+              FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm
               GROUP BY t
             )
           SELECT coalesce(v.t, m.t) AS t, coalesce(v.voice_minutes, 0) AS voice_minutes, coalesce(m.messages, 0) AS messages
@@ -374,7 +381,7 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
       }
 
       if (metric === "messages") {
-        const qy = `SELECT toStartOfInterval(at, ${interval}) AS t, count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32}) GROUP BY t ORDER BY t`;
+        const qy = `SELECT toStartOfInterval(at, ${interval}) AS t, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY t ORDER BY t`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays }, format: "JSONEachRow" });
         return await r.json();
       }
@@ -400,7 +407,7 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
     case "bar": {
       const { metric, rangeDays, limit } = q.config;
       if (metric === "top_channels") {
-        const qy = `SELECT channel_id AS k, count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32}) GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
+        const qy = `SELECT channel_id AS k, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays, lim: limit }, format: "JSONEachRow" });
         return await r.json();
       }
@@ -410,13 +417,13 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
         return await r.json();
       }
       if (metric === "messages_by_hour") {
-        const qy = `SELECT toHour(at) AS hk, count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32}) GROUP BY hk ORDER BY hk`;
+        const qy = `SELECT toHour(at) AS hk, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY hk ORDER BY hk`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays }, format: "JSONEachRow" });
         const rows = (await r.json()) as { hk?: string; c?: string }[];
         return rows.map((row) => ({ k: `${row.hk ?? 0}:00`, c: row.c ?? "0" }));
       }
       if (metric === "messages_by_dow") {
-        const qy = `SELECT toDayOfWeek(at) AS dow, count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32}) GROUP BY dow ORDER BY dow`;
+        const qy = `SELECT toDayOfWeek(at) AS dow, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY dow ORDER BY dow`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays }, format: "JSONEachRow" });
         const names = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
         const rows = (await r.json()) as { dow?: string; c?: string }[];
@@ -431,7 +438,7 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
         return await r.json();
       }
       if (metric === "top_authors") {
-        const qy = `SELECT author_id AS k, count() AS c FROM ${database}.message_events WHERE guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32}) GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
+        const qy = `SELECT author_id AS k, count() AS c FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64} AND event = 'create' AND at >= subtractDays(now(), {d:UInt32})`)} AS _dm GROUP BY k ORDER BY c DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, d: rangeDays, lim: limit }, format: "JSONEachRow" });
         return await r.json();
       }
@@ -456,7 +463,7 @@ export async function runWidgetQuery(q: WidgetQuery): Promise<unknown> {
         return await r.json();
       }
       if (kind === "message_events") {
-        const qy = `SELECT formatDateTime(at, '%Y-%m-%d %H:%i:%s') AS at, channel_id, author_id, event FROM ${database}.message_events WHERE guild_id = {g:UInt64} ORDER BY at DESC LIMIT {lim:UInt32}`;
+        const qy = `SELECT formatDateTime(at, '%Y-%m-%d %H:%i:%s') AS at, channel_id, author_id, event FROM ${messageEventsDeduped(database, `guild_id = {g:UInt64}`)} AS _dm ORDER BY at DESC LIMIT {lim:UInt32}`;
         const r = await ch.query({ query: qy, query_params: { g, lim: limit }, format: "JSONEachRow" });
         return await r.json();
       }
