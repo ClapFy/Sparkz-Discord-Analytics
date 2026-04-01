@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   createContext,
   useCallback,
@@ -60,6 +60,35 @@ function debounce<T extends (...args: Parameters<T>) => void>(fn: T, ms: number)
     if (t) clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   };
+}
+
+/** Stable signature so polling does not restart when object key order in `config` changes. */
+function stableConfigJson(config: Record<string, unknown>): string {
+  const keys = Object.keys(config).sort();
+  const sorted: Record<string, unknown> = {};
+  for (const k of keys) sorted[k] = config[k];
+  return JSON.stringify(sorted);
+}
+
+function stableWidgetsSignature(
+  widgets: { i: string; type: string; config: Record<string, unknown> }[]
+): string {
+  return [...widgets]
+    .sort((a, b) => a.i.localeCompare(b.i))
+    .map((w) => `${w.i}\t${w.type}\t${stableConfigJson(w.config)}`)
+    .join("\n");
+}
+
+/** Cheap equality so identical poll payloads do not trigger React re-renders or chart remounts. */
+function tilePayloadEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 function maxY(layout: Layout[]): number {
@@ -153,22 +182,47 @@ function formatStatValue(metric: string, v: number): string {
 
 function SeriesEmptyState({ lines }: { lines: string[] }) {
   return (
-    <div style={{ padding: "20px 12px", textAlign: "center" }}>
-      {lines.map((line, i) => (
-        <p
-          key={i}
-          className="sys-label"
-          style={{ margin: i ? "8px 0 0" : 0, color: "var(--muted)", lineHeight: 1.5 }}
-        >
-          {line}
-        </p>
-      ))}
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "16px 12px",
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: 520, textAlign: "center" }}>
+        {lines.map((line, i) => (
+          <p
+            key={i}
+            className="sys-label"
+            style={{
+              margin: i ? "8px 0 0" : 0,
+              color: "var(--muted)",
+              lineHeight: 1.5,
+              fontSize: 11,
+            }}
+          >
+            {line}
+          </p>
+        ))}
+      </div>
     </div>
   );
 }
 
 /** Poll all data tiles together on this interval (one batched HTTP request). */
 const TILE_REFRESH_MS = 1000;
+
+/** Fills tile body height so charts scale when the grid row is tall. */
+const CHART_FLEX_BOX: CSSProperties = {
+  width: "100%",
+  flex: 1,
+  minHeight: 160,
+  minWidth: 0,
+};
 
 type TileEntry = { data?: unknown; err: string | null; hydrated: boolean };
 
@@ -186,15 +240,14 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
       .map((i) => ({ i: i.i, type: i.type, config: i.config }));
   }, [items]);
 
-  const widgetsKey = useMemo(() => JSON.stringify(widgets), [widgets]);
+  const widgetsSig = useMemo(() => stableWidgetsSignature(widgets), [widgets]);
+  const widgetsRef = useRef(widgets);
+  widgetsRef.current = widgets;
+
+  const ctxValue = useMemo(() => ({ entries }), [entries]);
 
   useEffect(() => {
-    let list: { i: string; type: "stat" | "timeseries" | "bar" | "table"; config: Record<string, unknown> }[];
-    try {
-      list = JSON.parse(widgetsKey) as typeof list;
-    } catch {
-      list = [];
-    }
+    const list = [...widgetsRef.current].sort((a, b) => a.i.localeCompare(b.i));
 
     if (list.length === 0) {
       setEntries({});
@@ -202,20 +255,25 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
     }
 
     let cancelled = false;
+    /** Bumps when a new fetch starts or the effect cleans up — drop stale overlapping responses. */
+    let fetchGen = 0;
 
     const run = async () => {
+      const ticket = ++fetchGen;
       try {
         const r = await fetch("/api/dashboard/query-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ widgets: list }),
         });
+        if (cancelled || ticket !== fetchGen) return;
+
         const j = (await r.json()) as {
           results?: { i: string; ok: boolean; data?: unknown; error?: string }[];
           error?: unknown;
         };
 
-        if (cancelled) return;
+        if (cancelled || ticket !== fetchGen) return;
 
         if (!r.ok) {
           const msg =
@@ -223,55 +281,90 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
               ? JSON.stringify(j.error)
               : String(j?.error ?? r.statusText);
           setEntries((prev) => {
-            const next = { ...prev };
+            let draft: Record<string, TileEntry> | null = null;
+            const touch = () => {
+              if (!draft) draft = { ...prev };
+              return draft;
+            };
             for (const w of list) {
               const p = prev[w.i];
               if (p?.data !== undefined && p.hydrated) {
-                next[w.i] = { ...p, err: null };
+                if (p.err !== null) {
+                  touch()[w.i] = { ...p, err: null };
+                }
               } else {
-                next[w.i] = { data: p?.data, err: `Batch: ${msg}`, hydrated: false };
+                const errMsg = `Batch: ${msg}`;
+                if (!p || p.err !== errMsg || p.hydrated !== false) {
+                  touch()[w.i] = { data: p?.data, err: errMsg, hydrated: false };
+                }
               }
             }
-            return next;
+            return draft ?? prev;
           });
           return;
         }
 
         const results = j.results ?? [];
         setEntries((prev) => {
-          const next = { ...prev };
+          let draft: Record<string, TileEntry> | null = null;
+          const touch = () => {
+            if (!draft) draft = { ...prev };
+            return draft;
+          };
           for (const row of results) {
             if (row.ok) {
-              next[row.i] = { data: row.data, err: null, hydrated: true };
+              const p = prev[row.i];
+              if (
+                p &&
+                p.hydrated &&
+                p.err == null &&
+                tilePayloadEqual(p.data, row.data)
+              ) {
+                continue;
+              }
+              touch()[row.i] = { data: row.data, err: null, hydrated: true };
             } else {
               const p = prev[row.i];
               if (p?.data !== undefined && p.hydrated) {
-                next[row.i] = { ...p, err: null };
+                if (p.err !== null) {
+                  touch()[row.i] = { ...p, err: null };
+                }
               } else {
-                next[row.i] = {
-                  data: undefined,
-                  err: row.error ?? "Query error",
-                  hydrated: false,
-                };
+                const errMsg = row.error ?? "Query error";
+                if (!p || p.err !== errMsg || p.data !== undefined) {
+                  touch()[row.i] = {
+                    data: undefined,
+                    err: errMsg,
+                    hydrated: false,
+                  };
+                }
               }
             }
           }
-          return next;
+          return draft ?? prev;
         });
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled || ticket !== fetchGen) return;
         const msg = e instanceof Error ? e.message : "Network error";
         setEntries((prev) => {
-          const next = { ...prev };
+          let draft: Record<string, TileEntry> | null = null;
+          const touch = () => {
+            if (!draft) draft = { ...prev };
+            return draft;
+          };
           for (const w of list) {
             const p = prev[w.i];
             if (p?.data !== undefined && p.hydrated) {
-              next[w.i] = { ...p, err: null };
+              if (p.err !== null) {
+                touch()[w.i] = { ...p, err: null };
+              }
             } else {
-              next[w.i] = { data: undefined, err: msg, hydrated: false };
+              if (!p || p.err !== msg || p.hydrated !== false) {
+                touch()[w.i] = { data: undefined, err: msg, hydrated: false };
+              }
             }
           }
-          return next;
+          return draft ?? prev;
         });
       }
     };
@@ -280,11 +373,12 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
     const id = setInterval(run, TILE_REFRESH_MS);
     return () => {
       cancelled = true;
+      fetchGen += 1;
       clearInterval(id);
     };
-  }, [widgetsKey]);
+  }, [widgetsSig]);
 
-  return <TileDataContext.Provider value={{ entries }}>{children}</TileDataContext.Provider>;
+  return <TileDataContext.Provider value={ctxValue}>{children}</TileDataContext.Provider>;
 }
 
 /** Upper bound for Y when only one time bucket exists — keeps the bar proportional (not full-height). */
@@ -293,6 +387,22 @@ function yAxisMaxForSinglePoint(v: number): number {
   if (v <= 0) return 1;
   if (Number.isInteger(v)) return Math.max(1, Math.ceil(v * 1.2));
   return Math.max(v * 1.2, 1);
+}
+
+/** Short axis labels so tilted X ticks and narrow Y lanes stay readable; full string in tooltip. */
+function shortenAxisLabel(raw: string, maxLen = 18): string {
+  const s = String(raw);
+  if (s.length <= maxLen) return s;
+  if (/^\d{15,}$/.test(s)) {
+    return `${s.slice(0, 5)}…${s.slice(-4)}`;
+  }
+  return `${s.slice(0, Math.max(1, maxLen - 1))}…`;
+}
+
+function barTooltipLabel(label: unknown, payload: unknown): string {
+  const row = (payload as { payload?: { nameFull?: string } }[] | undefined)?.[0]?.payload;
+  if (row && typeof row.nameFull === "string") return row.nameFull;
+  return String(label ?? "");
 }
 
 function WidgetBody({ item }: { item: DashboardItem }) {
@@ -316,31 +426,38 @@ function WidgetBody({ item }: { item: DashboardItem }) {
 
   if (item.type === "placeholder") {
     return (
-      <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem", lineHeight: 1.45 }}>
-        {String(item.config.body ?? "")}
-      </p>
+      <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", alignItems: "center" }}>
+        <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.9rem", lineHeight: 1.45 }}>
+          {String(item.config.body ?? "")}
+        </p>
+      </div>
     );
   }
 
+  const loadingWrap = (node: ReactNode) => (
+    <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", alignItems: "center" }}>{node}</div>
+  );
+
   if (needsQuery) {
     if (!ctx) {
-      return <p className="sys-label">Loading</p>;
+      return loadingWrap(<p className="sys-label">Loading</p>);
     }
     const entry = ctx.entries[item.i];
-    if (!entry || (!entry.hydrated && !entry.err)) {
-      return <p className="sys-label">Loading</p>;
-    }
-    if (entry.data === undefined && entry.err) {
-      return <p style={{ color: "#c66" }}>{entry.err}</p>;
+    if (!entry) {
+      return loadingWrap(<p className="sys-label">Loading</p>);
     }
     if (entry.data === undefined) {
-      return <p className="sys-label">Loading</p>;
+      if (entry.err) {
+        return loadingWrap(<p style={{ color: "#c66", margin: 0 }}>{entry.err}</p>);
+      }
+      return loadingWrap(<p className="sys-label">Loading</p>);
     }
+    /* Stale-while-revalidate: keep showing data during refresh (ignore hydrated toggles). */
   }
 
   const data = needsQuery && ctx ? ctx.entries[item.i]!.data : null;
   if (needsQuery && data === undefined) {
-    return <p className="sys-label">Loading</p>;
+    return loadingWrap(<p className="sys-label">Loading</p>);
   }
 
   if (item.type === "stat") {
@@ -354,10 +471,30 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       else delta = `${(((v - p) / p) * 100).toFixed(1)}%`;
     }
     return (
-      <div>
-        <div style={{ fontSize: "2.2rem", lineHeight: 1 }}>{formatStatValue(metric, v)}</div>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "flex-start",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            fontSize: "clamp(1.35rem, 2.8vw + 1rem, 2.75rem)",
+            lineHeight: 1.05,
+            wordBreak: "break-word",
+          }}
+        >
+          {formatStatValue(metric, v)}
+        </div>
         {delta != null ? (
-          <p className="sys-label" style={{ marginTop: 8 }}>
+          <p className="sys-label" style={{ margin: 0, lineHeight: 1.4 }}>
             {statCompareLabel(metric)}: {delta}
           </p>
         ) : null}
@@ -386,7 +523,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         );
       }
       return (
-        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+        <div style={CHART_FLEX_BOX}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
               <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
@@ -431,7 +568,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         </>
       );
       return (
-        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+        <div style={CHART_FLEX_BOX}>
           <ResponsiveContainer width="100%" height="100%">
             {chart === "area" ? (
               <AreaChart data={rows} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
@@ -513,7 +650,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         </>
       );
       return (
-        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+        <div style={CHART_FLEX_BOX}>
           <ResponsiveContainer width="100%" height="100%">
             {chart === "area" ? (
               <AreaChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
@@ -585,23 +722,47 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       const v = rows[0].c;
       const yMax = yAxisMaxForSinglePoint(v);
       return (
-        <div style={{ width: "100%", height: 200, minWidth: 0 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={rows} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
-              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 11 }} />
-              <YAxis
-                domain={[0, yMax]}
-                tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                width={40}
-                allowDecimals={!Number.isInteger(v)}
-              />
-              <Tooltip
-                contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
-              />
-              <Bar dataKey="c" fill={chartTheme.fill} radius={[4, 4, 0, 0]} maxBarSize={72} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div style={{ flex: 1, minHeight: 140, minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={rows} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
+                <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+                <XAxis dataKey="t" tick={{ fill: chartTheme.tick, fontSize: 11 }} />
+                <YAxis
+                  domain={[0, yMax]}
+                  tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                  width={40}
+                  allowDecimals={!Number.isInteger(v)}
+                />
+                <Tooltip
+                  contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+                />
+                <Bar dataKey="c" fill={chartTheme.fill} radius={[4, 4, 0, 0]} maxBarSize={72} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <p
+            className="sys-label"
+            style={{
+              margin: "10px 0 0",
+              paddingBottom: 4,
+              lineHeight: 1.45,
+              flexShrink: 0,
+              color: "var(--muted)",
+            }}
+          >
+            Single time bucket — line charts need two or more points; this bar avoids a stray dot. More
+            points appear as data accumulates.
+          </p>
         </div>
       );
     }
@@ -617,7 +778,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       </>
     );
     return (
-      <div style={{ width: "100%", height: 200, minWidth: 0 }}>
+      <div style={CHART_FLEX_BOX}>
         <ResponsiveContainer width="100%" height="100%">
           {chart === "area" ? (
             <AreaChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
@@ -664,59 +825,83 @@ function WidgetBody({ item }: { item: DashboardItem }) {
       );
     }
     if (horizontal) {
-      const rows = rawBars.map((r) => ({ name: r.nameFull, c: r.c }));
+      const rows = rawBars.map((r) => ({
+        name: shortenAxisLabel(r.nameFull, 26),
+        nameFull: r.nameFull,
+        c: r.c,
+      }));
       const maxLen = rows.reduce((m, r) => Math.max(m, r.name.length), 0);
-      const yAxisWidth = Math.min(340, Math.max(168, Math.ceil(maxLen * 6.8 + 16)));
-      const chartH = Math.max(240, rows.length * 44 + 48);
+      const yAxisWidth = Math.min(200, Math.max(88, Math.ceil(maxLen * 7 + 14)));
+      const chartH = Math.max(200, rows.length * 40 + 56);
       return (
-        <div style={{ width: "100%", maxHeight: 440, overflowY: "auto", minWidth: 0 }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            width: "100%",
+            maxHeight: "100%",
+            overflowY: "auto",
+            overflowX: "hidden",
+          }}
+        >
           <div style={{ width: "100%", height: chartH, minWidth: 0 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              layout="vertical"
-              data={rows}
-              margin={{ top: 10, right: 16, left: 8, bottom: 10 }}
-              barCategoryGap={14}
-            >
-              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" horizontal={false} />
-              <XAxis type="number" tick={{ fill: chartTheme.tick, fontSize: 12 }} />
-              <YAxis
-                type="category"
-                dataKey="name"
-                width={yAxisWidth}
-                interval={0}
-                tick={{
-                  fill: chartTheme.tick,
-                  fontSize: 12,
-                  dominantBaseline: "middle",
-                }}
-              />
-              <Tooltip
-                contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
-              />
-              <Bar dataKey="c" fill="#ffffff" opacity={0.85} maxBarSize={36} radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                layout="vertical"
+                data={rows}
+                margin={{ top: 10, right: 16, left: 8, bottom: 10 }}
+                barCategoryGap={14}
+              >
+                <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" tick={{ fill: chartTheme.tick, fontSize: 12 }} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={yAxisWidth}
+                  interval={0}
+                  tick={{
+                    fill: chartTheme.tick,
+                    fontSize: 11,
+                    dominantBaseline: "middle",
+                  }}
+                />
+                <Tooltip
+                  labelFormatter={(l, p) => barTooltipLabel(l, p)}
+                  contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
+                />
+                <Bar dataKey="c" fill="#ffffff" opacity={0.85} maxBarSize={36} radius={[0, 3, 3, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       );
     }
-    const rows = rawBars.map((r) => ({ name: r.nameFull.slice(0, 40), c: r.c }));
+    const rows = rawBars.map((r) => ({
+      name: shortenAxisLabel(r.nameFull),
+      nameFull: r.nameFull,
+      c: r.c,
+    }));
+    const maxLabelChars = rows.reduce((m, r) => Math.max(m, r.name.length), 0);
+    const xAxisHeight = Math.min(100, Math.max(52, 16 + Math.ceil(maxLabelChars * 5.5)));
+    const bottomMargin = Math.min(96, Math.max(36, xAxisHeight + 8));
     return (
-      <div style={{ width: "100%", height: 220, minWidth: 0 }}>
+      <div style={{ ...CHART_FLEX_BOX, minHeight: 200 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} margin={{ top: 4, right: 4, left: -18, bottom: 40 }}>
+          <BarChart data={rows} margin={{ top: 6, right: 6, left: -14, bottom: bottomMargin }}>
             <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
             <XAxis
               dataKey="name"
               tick={{ fill: chartTheme.tick, fontSize: 10 }}
               interval={0}
-              angle={-25}
+              angle={-32}
               textAnchor="end"
-              height={60}
+              height={xAxisHeight}
+              tickMargin={6}
             />
             <YAxis tick={{ fill: chartTheme.tick, fontSize: 11 }} width={36} />
             <Tooltip
+              labelFormatter={(l, p) => barTooltipLabel(l, p)}
               contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}
             />
             <Bar dataKey="c" fill="#ffffff" opacity={0.85} />
@@ -727,15 +912,54 @@ function WidgetBody({ item }: { item: DashboardItem }) {
   }
 
   const rows = data as Record<string, string>[];
-  if (!rows?.length) return <p className="sys-label">No rows</p>;
+  if (!rows?.length) {
+    return loadingWrap(<p className="sys-label">No rows</p>);
+  }
   const keys = Object.keys(rows[0]);
+  const cellStyle: CSSProperties = {
+    padding: "4px 6px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    verticalAlign: "top",
+  };
   return (
-    <div style={{ overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        overflow: "auto",
+        WebkitOverflowScrolling: "touch",
+      }}
+    >
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          fontSize: "0.88rem",
+          tableLayout: "fixed",
+        }}
+      >
+        <colgroup>
+          {keys.map((k) => {
+            const kk = k.toLowerCase();
+            let w: string | undefined;
+            if (kk === "at" || kk === "t" || kk.endsWith("_at")) w = "14%";
+            else if (kk === "channel") w = "20%";
+            else if (kk === "author" || kk === "user") w = "42%";
+            else if (kk === "event" || kk === "kind" || kk === "action") w = "12%";
+            return <col key={k} style={{ width: w }} />;
+          })}
+        </colgroup>
         <thead>
           <tr>
             {keys.map((k) => (
-              <th key={k} className="sys-label" style={{ textAlign: "left", padding: "4px 6px" }}>
+              <th
+                key={k}
+                className="sys-label"
+                style={{ textAlign: "left", padding: "4px 6px", overflow: "hidden", textOverflow: "ellipsis" }}
+              >
                 {k}
               </th>
             ))}
@@ -744,11 +968,14 @@ function WidgetBody({ item }: { item: DashboardItem }) {
         <tbody>
           {rows.map((r, i) => (
             <tr key={i} style={{ borderTop: "1px solid #1a1a1a" }}>
-              {keys.map((k) => (
-                <td key={k} style={{ padding: "4px 6px", wordBreak: "break-all" }}>
-                  {String(r[k] ?? "")}
-                </td>
-              ))}
+              {keys.map((k) => {
+                const text = String(r[k] ?? "");
+                return (
+                  <td key={k} style={cellStyle} title={text}>
+                    {text}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -1307,7 +1534,17 @@ export function DashboardClient({ username }: { username: string }) {
                 </button>
               </div>
             </div>
-            <div style={{ flex: 1, minHeight: 0, marginTop: item.type === "section" ? 0 : 8 }}>
+            <div
+              className={item.type === "section" ? undefined : "dashboard-tile-body"}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                marginTop: item.type === "section" ? 0 : 8,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
               <WidgetBody item={item} />
             </div>
           </div>

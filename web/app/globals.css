@@ -118,6 +118,17 @@ button:disabled {
   bottom: 2px !important;
 }
 
+/* Clip tile chrome/content without hiding the grid resize handle (sibling of .panel). */
+.layout .react-grid-item > .panel {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.dashboard-tile-body {
+  min-width: 0;
+}
+
 @media (max-width: 640px) {
   body {
     font-size: 16px;

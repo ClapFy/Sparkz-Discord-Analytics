@@ -25,6 +25,8 @@ export const envSchema = z.object({
     .optional()
     .transform((v) => v !== "false" && v !== "0"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  /** Shown as "Listening to …" in the member list. Empty disables custom presence. */
+  DISCORD_PRESENCE_TEXT: z.string().optional().default("built by clapfy"),
   CH_BATCH_MS: z.coerce.number().int().positive().default(2000),
   CH_BATCH_MAX_ROWS: z.coerce.number().int().positive().default(500),
 });

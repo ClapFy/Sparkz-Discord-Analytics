@@ -1,5 +1,7 @@
 import {
+  ActivityType,
   Client,
+  Events,
   GatewayIntentBits,
   Partials,
 } from "discord.js";
@@ -41,6 +43,14 @@ const client = new Client({
 registerCollectors(client, env.DISCORD_GUILD_ID, ch, (level, msg) =>
   log(level as "debug" | "info" | "warn" | "error", msg)
 );
+
+client.once(Events.ClientReady, (c) => {
+  const text = env.DISCORD_PRESENCE_TEXT.trim();
+  if (text) {
+    c.user.setActivity(text, { type: ActivityType.Listening });
+    log("info", `Presence: Listening to ${text}`);
+  }
+});
 
 async function shutdown() {
   log("info", "Shutting down");

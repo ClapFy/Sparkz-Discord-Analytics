@@ -14,6 +14,23 @@ function authHeaders(token: string): HeadersInit {
   return { Authorization: `Bot ${token}` };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** One retry on rate limit / transient errors to prefer usernames over falling back to raw IDs. */
+async function discordFetch(url: string, headers: HeadersInit): Promise<Response> {
+  let res = await fetch(url, { headers });
+  if (res.status === 429 || res.status === 503) {
+    const ra = res.headers.get("retry-after");
+    const sec = ra ? Number.parseFloat(ra) : NaN;
+    const ms = Number.isFinite(sec) ? Math.min(8000, Math.max(250, sec * 1000)) : 450;
+    await sleep(ms);
+    res = await fetch(url, { headers });
+  }
+  return res;
+}
+
 function formatUser(u: { username: string; global_name?: string | null }): string {
   const g = u.global_name?.trim();
   if (g) return `${g} (@${u.username})`;
@@ -47,14 +64,12 @@ async function fetchGuildMemberLabel(
   userId: string,
   token: string
 ): Promise<string> {
-  let res = await fetch(`${API}/guilds/${guildId}/members/${userId}`, {
-    headers: authHeaders(token),
-  });
+  let res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, authHeaders(token));
   if (res.ok) {
     const m = (await res.json()) as { nick?: string | null; user: { username: string; global_name?: string | null } };
     if (m.user?.username) return formatMember(m);
   }
-  res = await fetch(`${API}/users/${userId}`, { headers: authHeaders(token) });
+  res = await discordFetch(`${API}/users/${userId}`, authHeaders(token));
   if (res.ok) {
     const u = (await res.json()) as { username: string; global_name?: string | null };
     if (u.username) return formatUser(u);
@@ -63,7 +78,7 @@ async function fetchGuildMemberLabel(
 }
 
 async function fetchChannelLabel(channelId: string, token: string): Promise<string> {
-  const res = await fetch(`${API}/channels/${channelId}`, { headers: authHeaders(token) });
+  const res = await discordFetch(`${API}/channels/${channelId}`, authHeaders(token));
   if (!res.ok) return channelId;
   const c = (await res.json()) as { name?: string; type?: number };
   if (typeof c.name === "string" && c.name.length > 0 && typeof c.type === "number") {
@@ -75,7 +90,7 @@ async function fetchChannelLabel(channelId: string, token: string): Promise<stri
 
 /** All guild channels (threads not listed — filled via fetchChannelLabel). */
 async function fetchGuildChannelLabelMap(guildId: string, token: string): Promise<Map<string, string>> {
-  const res = await fetch(`${API}/guilds/${guildId}/channels`, { headers: authHeaders(token) });
+  const res = await discordFetch(`${API}/guilds/${guildId}/channels`, authHeaders(token));
   const map = new Map<string, string>();
   if (!res.ok) return map;
   const list = (await res.json()) as Array<{ id: string; name: string; type: number }>;
@@ -88,7 +103,7 @@ async function fetchGuildChannelLabelMap(guildId: string, token: string): Promis
 }
 
 async function fetchGuildRoleLabelMap(guildId: string, token: string): Promise<Map<string, string>> {
-  const res = await fetch(`${API}/guilds/${guildId}/roles`, { headers: authHeaders(token) });
+  const res = await discordFetch(`${API}/guilds/${guildId}/roles`, authHeaders(token));
   const map = new Map<string, string>();
   if (!res.ok) return map;
   const list = (await res.json()) as Array<{ id: string; name: string }>;
@@ -153,8 +168,22 @@ export async function enrichMessageEventTableRows(
   rows: Record<string, string>[],
   guildId: string
 ): Promise<Record<string, string>[]> {
+  if (rows.length === 0) return rows;
+
+  const idsOnly = () =>
+    rows.map((r) => {
+      const cid = snowflakeFromCell(r.channel_id);
+      const aid = snowflakeFromCell(r.author_id);
+      return {
+        at: r.at,
+        channel: cid,
+        author: aid,
+        event: r.event,
+      };
+    });
+
   const token = botToken();
-  if (!token || rows.length === 0) return rows;
+  if (!token) return idsOnly();
 
   const authorIds = rows.map((r) => snowflakeFromCell(r.author_id)).filter(Boolean);
   const channelIds = rows.map((r) => snowflakeFromCell(r.channel_id)).filter(Boolean);
@@ -181,8 +210,20 @@ export async function enrichMemberEventTableRows(
   rows: Record<string, string>[],
   guildId: string
 ): Promise<Record<string, string>[]> {
+  if (rows.length === 0) return rows;
+
+  const idsOnly = () =>
+    rows.map((r) => {
+      const uid = snowflakeFromCell(r.user_id);
+      return {
+        at: r.at,
+        user: uid,
+        event: r.event,
+      };
+    });
+
   const token = botToken();
-  if (!token || rows.length === 0) return rows;
+  if (!token) return idsOnly();
 
   const userIds = rows.map((r) => snowflakeFromCell(r.user_id)).filter(Boolean);
   const users = await mapUniqueIds(userIds, 5, (id) => fetchGuildMemberLabel(guildId, id, token));
@@ -203,8 +244,15 @@ export async function enrichBarRowsByKeyKind(
   guildId: string,
   kind: "channel" | "user" | "role"
 ): Promise<{ k?: string; c?: string }[]> {
+  if (rows.length === 0) return rows;
+
   const token = botToken();
-  if (!token || rows.length === 0) return rows;
+  if (!token) {
+    return rows.map((r) => {
+      const k = snowflakeFromCell(r.k);
+      return { ...r, k: k || r.k };
+    });
+  }
 
   const keys = rows.map((r) => snowflakeFromCell(r.k)).filter(Boolean);
   let labelMap: Map<string, string>;
