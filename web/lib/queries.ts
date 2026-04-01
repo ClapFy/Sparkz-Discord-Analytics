@@ -99,9 +99,11 @@ function gid() {
 /**
  * One row per (guild_id, message_id, event) with min(at) — collapses duplicate inserts
  * for the same logical Discord event.
+ * Filter in an inner subquery so time predicates on `at` are not merged with the outer
+ * aggregate; ClickHouse otherwise errors: "Aggregate function min(at) AS at is found in WHERE".
  */
 function messageEventsDeduped(database: string, whereClause: string): string {
-  return `(SELECT guild_id, message_id, any(channel_id) AS channel_id, any(author_id) AS author_id, event, min(at) AS at FROM ${database}.message_events WHERE ${whereClause} GROUP BY guild_id, message_id, event)`;
+  return `(SELECT guild_id, message_id, any(channel_id) AS channel_id, any(author_id) AS author_id, event, min(at) AS at FROM (SELECT guild_id, message_id, channel_id, author_id, event, at FROM ${database}.message_events WHERE ${whereClause}) AS _me GROUP BY guild_id, message_id, event)`;
 }
 
 async function scalarNumber(query: string, params: Record<string, unknown>): Promise<number> {
