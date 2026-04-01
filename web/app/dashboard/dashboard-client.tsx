@@ -634,7 +634,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
   if (item.type === "bar") {
     const horizontal = Boolean(item.config.horizontal);
     const rows = (Array.isArray(data) ? data : []).map((r: { k?: string; c?: string }) => ({
-      name: String(r.k ?? "").slice(0, 22),
+      name: String(r.k ?? "").slice(0, 40),
       c: Number(r.c ?? 0),
     }));
     if (rows.length === 0) {
@@ -659,7 +659,7 @@ function WidgetBody({ item }: { item: DashboardItem }) {
                 type="category"
                 dataKey="name"
                 tick={{ fill: chartTheme.tick, fontSize: 9 }}
-                width={68}
+                width={112}
               />
               <Tooltip
                 contentStyle={{ background: "#0a0a0a", border: "1px solid #333", color: "#fff" }}

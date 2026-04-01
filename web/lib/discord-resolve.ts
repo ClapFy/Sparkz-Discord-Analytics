@@ -98,6 +98,21 @@ async function fetchGuildRoleLabelMap(guildId: string, token: string): Promise<M
   return map;
 }
 
+/**
+ * ClickHouse UInt64 in JSON is often parsed as a JS number and loses precision (>2^53).
+ * Queries should use toString() in SQL; this normalizes leftovers (string / safe int / bigint).
+ */
+function snowflakeFromCell(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "bigint") return v.toString();
+  if (typeof v === "number" && Number.isInteger(v) && Number.isSafeInteger(v)) {
+    return String(Math.trunc(v));
+  }
+  if (typeof v === "number") return String(v);
+  return String(v).trim();
+}
+
 async function mapUniqueIds(
   ids: string[],
   concurrency: number,
@@ -141,8 +156,8 @@ export async function enrichMessageEventTableRows(
   const token = botToken();
   if (!token || rows.length === 0) return rows;
 
-  const authorIds = rows.map((r) => String(r.author_id ?? "")).filter(Boolean);
-  const channelIds = rows.map((r) => String(r.channel_id ?? "")).filter(Boolean);
+  const authorIds = rows.map((r) => snowflakeFromCell(r.author_id)).filter(Boolean);
+  const channelIds = rows.map((r) => snowflakeFromCell(r.channel_id)).filter(Boolean);
 
   const [authors, channels] = await Promise.all([
     mapUniqueIds(authorIds, 5, (id) => fetchGuildMemberLabel(guildId, id, token)),
@@ -150,8 +165,8 @@ export async function enrichMessageEventTableRows(
   ]);
 
   return rows.map((r) => {
-    const cid = String(r.channel_id ?? "");
-    const aid = String(r.author_id ?? "");
+    const cid = snowflakeFromCell(r.channel_id);
+    const aid = snowflakeFromCell(r.author_id);
     return {
       at: r.at,
       channel: channels.get(cid) ?? cid,
@@ -169,11 +184,11 @@ export async function enrichMemberEventTableRows(
   const token = botToken();
   if (!token || rows.length === 0) return rows;
 
-  const userIds = rows.map((r) => String(r.user_id ?? "")).filter(Boolean);
+  const userIds = rows.map((r) => snowflakeFromCell(r.user_id)).filter(Boolean);
   const users = await mapUniqueIds(userIds, 5, (id) => fetchGuildMemberLabel(guildId, id, token));
 
   return rows.map((r) => {
-    const uid = String(r.user_id ?? "");
+    const uid = snowflakeFromCell(r.user_id);
     return {
       at: r.at,
       user: users.get(uid) ?? uid,
@@ -191,7 +206,7 @@ export async function enrichBarRowsByKeyKind(
   const token = botToken();
   if (!token || rows.length === 0) return rows;
 
-  const keys = rows.map((r) => String(r.k ?? "")).filter(Boolean);
+  const keys = rows.map((r) => snowflakeFromCell(r.k)).filter(Boolean);
   let labelMap: Map<string, string>;
 
   if (kind === "channel") {
@@ -205,7 +220,7 @@ export async function enrichBarRowsByKeyKind(
   }
 
   return rows.map((r) => {
-    const k = String(r.k ?? "");
+    const k = snowflakeFromCell(r.k);
     return { ...r, k: labelMap.get(k) ?? k };
   });
 }
@@ -218,11 +233,11 @@ export async function enrichTopReactedTableRows(
   const token = botToken();
   if (!token || rows.length === 0) return rows;
 
-  const channelIds = rows.map((r) => String(r.channel_id ?? "")).filter(Boolean);
+  const channelIds = rows.map((r) => snowflakeFromCell(r.channel_id)).filter(Boolean);
   const channels = await mergeChannelLabels(guildId, token, channelIds);
 
   return rows.map((r) => {
-    const cid = String(r.channel_id ?? "");
+    const cid = snowflakeFromCell(r.channel_id);
     return {
       message_id: r.message_id,
       channel: channels.get(cid) ?? cid,
