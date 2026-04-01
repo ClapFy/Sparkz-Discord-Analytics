@@ -255,25 +255,26 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
     }
 
     let cancelled = false;
-    /** Bumps when a new fetch starts or the effect cleans up — drop stale overlapping responses. */
-    let fetchGen = 0;
+    /** Only one batch in flight; overlapping interval ticks must not bump a generation (that discarded slow responses and left tiles on Loading forever). */
+    let inFlight = false;
 
     const run = async () => {
-      const ticket = ++fetchGen;
+      if (inFlight) return;
+      inFlight = true;
       try {
         const r = await fetch("/api/dashboard/query-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ widgets: list }),
         });
-        if (cancelled || ticket !== fetchGen) return;
+        if (cancelled) return;
 
         const j = (await r.json()) as {
           results?: { i: string; ok: boolean; data?: unknown; error?: string }[];
           error?: unknown;
         };
 
-        if (cancelled || ticket !== fetchGen) return;
+        if (cancelled) return;
 
         if (!r.ok) {
           const msg =
@@ -344,7 +345,7 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
           return draft ?? prev;
         });
       } catch (e) {
-        if (cancelled || ticket !== fetchGen) return;
+        if (cancelled) return;
         const msg = e instanceof Error ? e.message : "Network error";
         setEntries((prev) => {
           let draft: Record<string, TileEntry> | null = null;
@@ -366,6 +367,8 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
           }
           return draft ?? prev;
         });
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -373,7 +376,6 @@ function TileDataProvider({ items, children }: { items: DashboardItem[]; childre
     const id = setInterval(run, TILE_REFRESH_MS);
     return () => {
       cancelled = true;
-      fetchGen += 1;
       clearInterval(id);
     };
   }, [widgetsSig]);
