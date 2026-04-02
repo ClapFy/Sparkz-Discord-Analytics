@@ -1,0 +1,48 @@
+# Template overview (markdown for Railway "Write" tab): devtools/railway-template-overview.md
+#
+# Railway does not read this file automatically. Use it as a checklist in the template UI, OR run:
+#   railway link -p Template
+#   npm run railway:wire-env
+# Optional env: RAILWAY_CLICKHOUSE_SERVICE, RAILWAY_APP_SERVICE, RAILWAY_CLICKHOUSE_REF, RAILWAY_CLICKHOUSE_DB
+#
+# The ${{...}} namespace MUST match the database service name on the template canvas exactly.
+# Your template uses "AnalyticsDB" — use ${{AnalyticsDB.*}} on the app (not ClickHouse).
+
+# --- AnalyticsDB (Docker clickhouse/clickhouse-server) — Variables tab ---
+# Set these so PORT / PUBLIC_PORT / CLICKHOUSE_DB / CLICKHOUSE_USER are not "filled by the user".
+
+PORT=8123
+PUBLIC_PORT=443
+# Railway ClickHouse plugin default DB name is often "railway"; app CLICKHOUSE_DATABASE must match.
+CLICKHOUSE_DB=railway
+# Must match the DB user your image creates (this stack uses "clickhouse").
+CLICKHOUSE_USER=clickhouse
+
+# Keep as-is if Railway already added them:
+# HOST=${{RAILWAY_PRIVATE_DOMAIN}}
+# HOST_PORT=${{HOST}}:${{PORT}}
+# PUBLIC_HOST=${{RAILWAY_PUBLIC_DOMAIN}}
+# DATABASE_URL=http://${{CLICKHOUSE_USER}}:${{CLICKHOUSE_PASSWORD}}@${{HOST}}:${{PORT}}/${{CLICKHOUSE_DB}}
+
+# --- Sparkz-Discord-Analytics (GitHub app) — Variables tab ---
+
+CLICKHOUSE_HOST=${{AnalyticsDB.RAILWAY_PRIVATE_DOMAIN}}
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_SECURE=false
+CLICKHOUSE_USER=${{AnalyticsDB.CLICKHOUSE_USER}}
+CLICKHOUSE_PASSWORD=${{AnalyticsDB.CLICKHOUSE_PASSWORD}}
+CLICKHOUSE_DATABASE=railway
+
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin
+
+NEXTAUTH_SECRET=${{secret(64, "abcdef0123456789")}}
+
+DISCORD_BOT_TOKEN=
+DISCORD_GUILD_ID=
+
+# If empty Discord vars are not allowed in your template flow, use placeholders instead:
+# DISCORD_BOT_TOKEN=__REPLACE_WITH_DISCORD_BOT_TOKEN__
+# DISCORD_GUILD_ID=000000000000000001
+
+# If your DB service is named differently (e.g. ClickHouse), replace AnalyticsDB in every ${{AnalyticsDB.*}} above.

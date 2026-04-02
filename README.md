@@ -1,8 +1,18 @@
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/sparkz-discord-analytics?referralCode=9SBBKw&utm_medium=integration&utm_source=template&utm_campaign=generic)
+
 # Sparkz Analytics
 
 Monorepo for a silent Discord analytics collector and a password-protected Next.js dashboard backed by ClickHouse. Message text is not stored; only metadata and event fields are written.
 
 <!-- deploy bump: 2026-03-31 -->
+
+## Common use cases
+
+- **Server owners and moderators** who want joins, leaves, voice time, reactions, and per-channel activity without ingesting or storing message bodies.
+- **Privacy-conscious communities** that prefer analytics on metadata only (IDs, timestamps, attachment/embed counts, flags)—aligned with the [privacy note](#privacy-note) below.
+- **Single-guild focus** operations: the bot targets one `DISCORD_GUILD_ID` and leaves other servers, suitable for a dedicated community or brand server.
+- **Self-hosted analytics** on Railway (or any ClickHouse + Node host) instead of third-party Discord analytics SaaS, with data in your own database.
+- **Power users and builders** who want append-only event data in ClickHouse for custom SQL, exports, or tooling beyond the bundled draggable dashboard.
 
 ## Structure
 

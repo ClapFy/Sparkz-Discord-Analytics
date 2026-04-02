@@ -15,3 +15,6 @@ npm-debug.log*
 coverage
 .turbo
 .cursor
+
+# Local Railway CLI project/service link — do not commit (GitHub deploys use dashboard wiring).
+.railway/
